@@ -320,12 +320,12 @@ handler 调用 `service.quit` 时立即进入 `_stop`。C stop 在当前 libuv c
 ### LUV-001：luv 动态库句柄按 service 重复加载
 
 - 严重程度：`P2`
-- 状态：`OPEN`
-- 证据：[src/loadluv.h:118](src/loadluv.h#L118)、[src/loadluv.h:224](src/loadluv.h#L224)
+- 状态：`FIXED`
+- 证据：[src/loadluv.c:82](src/loadluv.c#L82)、[src/loadluv.c:129](src/loadluv.c#L129)、[tests/c/service_lifecycle_test.c:47](tests/c/service_lifecycle_test.c#L47)
 
-每个 service 初始化都调用 `dlopen`，句柄只保存在栈上局部结构中，成功后既不统一保存也不 `dlclose`。不关闭有避免 C closure 悬空的合理性，但重复增加动态库引用计数没有必要。
+旧实现让每个 service 都调用 `dlopen/dlsym`，并遗失栈上 `luv_lib` 中的 handle。重复增加动态库引用计数没有必要，也没有明确函数指针的进程级生命周期。
 
-解决方向：使用 `pthread_once` 进程级加载和解析符号；进程存活期间保持一个句柄，为每个 VM 单独绑定 loop。
+现在由唯一的 loader 实现使用 `pthread_once` 加载并解析一次，保存成功或失败结果，handle 保留到进程退出。`luaopen_luv` 不属于 once：每个 VM 仍先绑定自己的 `uv_loop_t`，再创建并缓存自己的 luv module table。并发双 service 测试验证 loader 只初始化一次、VM/loop 不共享，关闭其中一个不影响另一个。
 
 ## 9. 序列化问题
 

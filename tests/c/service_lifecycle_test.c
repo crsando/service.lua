@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "loadluv.h"
 #include "service.h"
 
 #define PRODUCERS 8
@@ -41,6 +42,41 @@ start_service(void *data) {
     start_args_t *args = data;
     args->result = service_start(args->service);
     return NULL;
+}
+
+static void
+test_luv_loader_and_loop_isolation(void) {
+    static const char source[] =
+        "local uv=require 'luv' "
+        "local timer=uv.new_timer() "
+        "timer:start(60000,60000,function() end) "
+        "return function() end";
+    service_pool_t *pool = service_pool_new();
+    service_t *first = service_new(pool, "loop-a", source, NULL, 16);
+    service_t *second = service_new(pool, "loop-b", source, NULL, 16);
+    start_args_t starts[2] = {
+        { .service = first },
+        { .service = second },
+    };
+    pthread_t threads[2];
+
+    assert(pool != NULL && first != NULL && second != NULL);
+    assert(pthread_create(&threads[0], NULL, start_service, &starts[0]) == 0);
+    assert(pthread_create(&threads[1], NULL, start_service, &starts[1]) == 0);
+    assert(pthread_join(threads[0], NULL) == 0);
+    assert(pthread_join(threads[1], NULL) == 0);
+    assert(starts[0].result == 0 && starts[1].result == 0);
+    assert(luv_loader_initialization_count() == 1);
+    assert(first->L != second->L);
+    assert(service_get_loop(first) != service_get_loop(second));
+
+    assert(service_stop(first) == 0);
+    assert(service_join(first) == 0);
+    assert(service_get_state(second) == SERVICE_RUNNING);
+    assert(service_get_loop(second) != NULL);
+    assert(service_stop(second) == 0);
+    assert(service_join(second) == 0);
+    service_pool_delete(pool);
 }
 
 static void
@@ -214,6 +250,7 @@ test_pool_limits(void) {
 
 int
 main(void) {
+    test_luv_loader_and_loop_isolation();
     test_join_waits_for_pin();
     test_send_stop_race();
     test_stop_while_starting();

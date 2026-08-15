@@ -12,6 +12,7 @@
 #include "message.h"
 #include "service.h"
 #include "log.h"
+#include "loadluv.h"
 #include "lua-seri.h"
 
 static int lservice_pool_new(lua_State *L) {
@@ -249,6 +250,9 @@ luaseri_remove(lua_State *L) {
 
 // open lua library
 LUAMOD_API int luaopen_lservice3_c(lua_State *L) {
+	if (luv_loader_prepare(L) != 0)
+		return luaL_error(L, "could not initialize luv loader: %s",
+			luv_loader_error());
 	// luaL_checkversion(L);
 	luaL_Reg l[] = {
         // pool

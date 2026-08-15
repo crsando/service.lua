@@ -51,14 +51,18 @@ pthread_once
     -> retain handle until process exit
 ```
 
+这里的“一次”只指 `dlopen/dlsym`。luv 的 C 代码和函数地址由进程共享，但 Lua table、registry、userdata 和 callback 状态不能跨 VM 共享。宿主 VM 加载 `lservice3_c` 时优先从其 `package.cpath` 确定路径；直接使用 native C API 时，由第一个 service VM 惰性完成同一初始化。第一次初始化的成功或失败结果在进程内保持不变，不按 service 重试或切换 luv 版本。
+
 每个 service VM：
 
 1. `luv_set_loop(L, service_loop)`。
-2. 调用 `luaopen_luv(L)`，要求恰好返回 module table。
+2. 在保护调用中执行 `luaopen_luv(L)`，要求恰好返回一个 module table。
 3. 写入 `package.loaded["luv"]`。
 4. 恢复预期 Lua stack depth。
 
 不在 service stop 时 `dlclose`。Lua/C function 序列化可能让其他 VM 保存动态库代码地址。
+
+并发启动多个 service 时，`pthread_once` 只串行化首次动态库初始化；各 service 的 `luv_set_loop/luaopen_luv` 仍在各自 pthread 上操作各自 VM。测试必须证明 loader 初始化计数为 1、VM 和 loop 地址不同，并且关闭一个 service 不改变另一个 service 的 RUNNING 状态和 loop 可用性。
 
 POSIX 允许 `dlsym` 结果用于函数指针，但直接赋值会触发 `-Wpedantic`。实现使用有尺寸断言的 `memcpy` 在 `void *` 对象和函数指针对象之间复制表示，并在 Linux CI 上验证。
 

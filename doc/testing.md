@@ -99,6 +99,7 @@ contract 测试应该从重写第一天保持通过。行为契约暂未实现�
 ### TSAN
 
 - 多 producer mailbox。
+- 并发 service start 只初始化一次 luv loader，每个 VM 绑定独立 loop。
 - lookup/pin 与 unregister/free。
 - STARTING/start handshake/stop。
 - concurrent stop/join。

@@ -493,7 +493,7 @@ make test-regression       # 旧 serializer 当前预期失败
 - [ ] 将结构化 start/loop-close 根因返回调用方，而不只写日志。
 - [x] 实现 control async 和非重入的有序 stop。
 - [ ] 用 timer/socket/luv userdata 覆盖 handle close 和 loop close 异常路径。
-- [ ] 使用 `pthread_once` 加载 luv 并为每个 VM 绑定独立 loop。
+- [x] 使用 `pthread_once` 加载 luv 并为每个 VM 绑定独立 loop。
 - [x] 实现 join/self-join/repeated join 契约。
 - [ ] bootstrap 后 service/message/buffer/handle 计数归零。
 
