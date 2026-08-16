@@ -13,6 +13,7 @@ LIBS=-lpthread -lluajit-5.1 -luv -ldl
 
 LUA_ENV=env 'LUA_PATH=./lua/?.lua;;' 'LUA_CPATH=./?.so;;'
 CONTRACT_ABI_TEST=$(BUILD_DIR)/message_abi_test
+SERI_MODULE=$(BUILD_DIR)/seri.so
 MAILBOX_TEST=$(BUILD_DIR)/mailbox_test
 MAILBOX_TSAN_TEST=$(BUILD_DIR)/mailbox_test_tsan
 SERVICE_TEST=$(BUILD_DIR)/service_lifecycle_test
@@ -39,6 +40,7 @@ lservice3_c.so: $(SRCS)
 
 test: test-contract test-mailbox test-service
 	$(LUA_ENV) luajit tests/lua/serializer_spec.lua
+	$(LUA_ENV) luajit tests/lua/serializer_shared_ref_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/lifecycle_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/mailbox_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/rpc_spec.lua
@@ -49,8 +51,13 @@ $(CONTRACT_ABI_TEST): tests/contract/message_abi_test.c src/message.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CONTRACT_CFLAGS) -Isrc -o $@ $<
 
-test-contract: lservice3_c.so $(CONTRACT_ABI_TEST)
+$(SERI_MODULE): src/lua-seri.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DTEST_SERI $(SHARED) $(LUAINC) -Isrc -o $@ $< -lluajit-5.1
+
+test-contract: lservice3_c.so $(CONTRACT_ABI_TEST) $(SERI_MODULE)
 	$(LUA_ENV) luajit tests/contract/api_surface_spec.lua
+	env 'LUA_CPATH=./$(BUILD_DIR)/?.so;;' luajit tests/contract/serializer_module_spec.lua
 	$(CONTRACT_ABI_TEST)
 
 $(MAILBOX_TEST): tests/c/mailbox_test.c src/mailbox.c src/mailbox.h src/message.c src/message.h
@@ -84,13 +91,13 @@ test-tsan: $(MAILBOX_TSAN_TEST) $(SERVICE_TSAN_TEST)
 	setarch $(shell uname -m) -R env TSAN_OPTIONS=halt_on_error=1 $(SERVICE_TSAN_TEST)
 
 test-regression: lservice3_c.so
-	$(LUA_ENV) luajit tests/regression/serializer_shared_ref_spec.lua
+	$(LUA_ENV) luajit tests/lua/serializer_shared_ref_spec.lua
 
 install: lservice3_c.so
 	cp lservice3_c.so $(PREFIX)/lib/lua/5.1/
 	cp lua/lservice3.lua $(PREFIX)/share/lua/5.1/
 
 clean:
-	rm -f lservice3_c.$(SO) $(CONTRACT_ABI_TEST) $(MAILBOX_TEST) \
+	rm -f lservice3_c.$(SO) $(CONTRACT_ABI_TEST) $(SERI_MODULE) $(MAILBOX_TEST) \
 		$(MAILBOX_TSAN_TEST) $(SERVICE_TEST) $(SERVICE_TSAN_TEST)
 	rmdir $(BUILD_DIR) 2>/dev/null || true

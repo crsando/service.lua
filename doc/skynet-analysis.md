@@ -462,7 +462,7 @@ mailbox_delete   -> drain 后 message_dispose
 
 消息局部所有权与 `service_t *`/`uv_async_t` 的外层生存期现在已经串成闭环：runtime 生成的 addr 以不复用 ID 和 tombstone 保持稳定，send pin 覆盖 push/notify，stop 在关闭 async 前等待 pin 归零。
 
-当前 `lua-seri` 与 Skynet 当前版本不是同一协议。它带 4 字节内部长度、table ref/cycle 和 C function 扩展。尤其要注意：[`seri_unpack`](../src/lua-seri.c) 从 buffer 前 4 字节自行读取长度，而不是以公开传入的 `size` 约束读取；[`serializer_shared_ref_spec.lua`](../tests/regression/serializer_shared_ref_spec.lua) 记录了非 ancestor 共享引用的已知失败。按当前决定，这些问题保留为受信任 serializer 的后续任务，不阻塞下一阶段生命周期工作。
+当前 `lua-seri` 与 Skynet 当前版本不是同一协议。它带 4 字节内部长度、table ref/cycle 和 C function 扩展。非 ancestor 共享引用已经按其直接上游 ltask 的 `TABLE_MARK + REF` 协议修复，并由 [`serializer_shared_ref_spec.lua`](../tests/lua/serializer_shared_ref_spec.lua) 覆盖。仍需注意：[`seri_unpack`](../src/lua-seri.c) 从 buffer 前 4 字节自行读取长度，而不是以公开传入的 `size` 约束读取；该可信 buffer 边界和格式加固仍属于后续可选任务。
 
 ## 14. 当前实现与后续建议
 

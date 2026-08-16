@@ -15,6 +15,10 @@
 #include <assert.h>
 #include <string.h>
 
+#ifndef LUAMOD_API
+#define LUAMOD_API LUALIB_API
+#endif
+
 #define TYPE_BOOLEAN 0
 
 #define TYPE_BOOLEAN_NIL 0
@@ -269,9 +273,7 @@ static void pack_one(lua_State *L, struct write_block *b, int index);
 
 static int
 wb_table_array(lua_State *L, struct write_block * wb, int index) {
-    // Mingda Qiu
-	// int array_size = (int)lua_rawlen(L,index);
-	int array_size = (int)lua_objlen(L,index); // rawlen => objlen
+	int array_size = (int)lua_objlen(L,index);
 	if (array_size >= EXTEND_NUMBER) {
 		uint8_t n = COMBINE_TYPE(TYPE_TABLE, EXTEND_NUMBER);
 		wb_push(wb, &n, 1);
@@ -296,15 +298,14 @@ wb_table_hash(lua_State *L, struct write_block * wb, int index, int array_size) 
 	lua_pushnil(L);
 	while (lua_next(L, index) != 0) {
 		if (lua_type(L,-2) == LUA_TNUMBER) {
-			// Mingda Qiu: luajit has no lua_isinteger
-			// if (lua_isinteger(L, -2)) {
-			// lua_Number x = lua_tonumber(L,-2);
-				lua_Integer x = lua_tointeger(L,-2);
-				if (x>0 && x<=array_size) {
+			lua_Number n = lua_tonumber(L, -2);
+			if (n > 0 && n <= array_size) {
+				lua_Integer x = lua_tointeger(L, -2);
+				if ((lua_Number)x == n) {
 					lua_pop(L,1);
 					continue;
 				}
-			// }
+			}
 		}
 		pack_one(L,wb,-2);
 		pack_one(L,wb,-1);
@@ -349,9 +350,6 @@ mark_table(lua_State *L, struct write_block *b, int index) {
 		lua_replace(L, s->ref_index+1);
 		int i;
 		for (i=0;i<MAX_REFERENCE;i++) {
-			// lua_pushinteger(L, i+1);
-			// lua_rawsetp(L, s->ref_index, b->r[i].object);
-
 			lua_pushlightuserdata(L, (void*)b->r[i].object);
 			lua_pushinteger(L, i+1);
 			lua_rawset(L, s->ref_index);
@@ -367,9 +365,6 @@ mark_table(lua_State *L, struct write_block *b, int index) {
 		b->r[id].address = addr;
 	} else {
 		++id;
-
-		// lua_pushinteger(L, id);
-		// lua_rawsetp(L, s->ref_index, obj);
 		lua_pushlightuserdata(L, (void*)obj);
 		lua_pushinteger(L, id);
 		lua_rawset(L, s->ref_index);
@@ -434,30 +429,17 @@ lookup_ref(lua_State *L, struct write_block *b, const void *obj) {
 		}
 		return 0;
 	} else {
-		// Mingda Qiu : no rawgetp, use rawget instead
-		// if (lua_rawgetp(L, b->s.ref_index, obj) != LUA_TNUMBER) {
-		// 	lua_pop(L, 1);
-		// 	return 0;
-		// }
-
 		lua_pushlightuserdata(L, (void*)obj);
 		lua_rawget(L, b->s.ref_index);
-		if(lua_type(L,-1) != LUA_TNUMBER) {
+		if (lua_type(L, -1) != LUA_TNUMBER) {
 			lua_pop(L, 1);
 			return 0;
 		}
 
-
 		int id = lua_tointeger(L, -1);
 		lua_pop(L, 1);
-
-		// Mingda Qiu : in lua 5.1 lua_rawgeti returns nothing (5.4: return the type of the pushed value)
-		//
-		// if (lua_rawgeti(L, b->s.ref_index + 1, id) == LUA_TLIGHTUSERDATA) {
-		//
 		lua_rawgeti(L, b->s.ref_index + 1, id);
-
-		if(lua_type(L, -1)== LUA_TLIGHTUSERDATA) {
+		if (lua_type(L, -1) == LUA_TLIGHTUSERDATA) {
 			uint8_t * tag = (uint8_t *)lua_touserdata(L, -1);
 			lua_pop(L, 1);
 			change_mark(tag);
@@ -493,14 +475,8 @@ pack_one(lua_State *L, struct write_block *b, int index) {
 		wb_nil(b);
 		break;
 	case LUA_TNUMBER: {
-		// Mingda Qiu : luajit has no integer type
-		// if (lua_isinteger(L, index)) {
-			// lua_Integer x = lua_tointeger(L,index);
-			// wb_integer(b, x);
-		// } else {
-			lua_Number n = lua_tonumber(L,index);
-			wb_real(b,n);
-		// }
+		lua_Number n = lua_tonumber(L,index);
+		wb_real(b,n);
 		break;
 	}
 	case LUA_TBOOLEAN:
@@ -698,20 +674,12 @@ unpack_ref(lua_State *L, struct read_block *rb, int ref) {
 	struct stack *s = &rb->s;
 	if (ref == EXTEND_NUMBER) {
 		int id = get_extend_integer(L, rb);
-
-		// Mingda Qiu: in 5.1, lua_rawgeti returns nothing
-		// if (lua_type(L, s->ref_index) != LUA_TTABLE || lua_rawgeti(L, s->ref_index, id) != LUA_TTABLE) {
-		// 	luaL_error(L, "Invalid ref object id %d", id);
-		// }
-
 		if (lua_type(L, s->ref_index) != LUA_TTABLE) {
 			luaL_error(L, "Invalid ref object id %d", id);
 		}
-		else {
-			lua_rawgeti(L, s->ref_index, id);
-			if( lua_type(L,-1) == LUA_TTABLE)
-				luaL_error(L, "Invalid ref object id %d", id);
-		}
+		lua_rawgeti(L, s->ref_index, id);
+		if (lua_type(L, -1) != LUA_TTABLE)
+			luaL_error(L, "Invalid ref object id %d", id);
 	} else {
 		if (ref >= s->depth)
 			luaL_error(L, "Invalid ref object %d/%d", ref, s->depth);
@@ -950,7 +918,9 @@ luaseri_pack(lua_State *L) {
 
 LUAMOD_API int
 luaopen_seri(lua_State *L) {
+#if LUA_VERSION_NUM >= 502
 	luaL_checkversion(L);
+#endif
 	luaL_Reg l[] = {
 		{ "pack", luaseri_pack },
 		{ "unpack", luaseri_unpack },

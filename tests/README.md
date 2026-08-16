@@ -21,6 +21,9 @@ multi-value responses (including nil values), immediate and delayed handler
 errors, nested calls, and 128 concurrently pending calls.
 It also covers the exact 256-message dispatch boundary, one `on_idle` call per
 dispatch round, mailbox continuation, and timer fairness under inbox backlog.
+Serializer coverage includes fractional numeric keys, `__pairs`, cycles,
+top-level and nested shared references, mixed cyclic graphs, and the exact
+1/31/32/33/1000-object reference thresholds.
 
 Run the standalone MPSC mailbox and service lifecycle tests:
 
@@ -39,13 +42,12 @@ The original `test.lua` is preserved as `legacy/test.lua`. It is not part of
 the default suite because it imports the removed `lservice2` module and mixes
 manual experiments with an indefinitely running signal loop.
 
-Run design-regression tests separately:
+Run the focused historical serializer regression separately:
 
 ```sh
 make test-regression
 ```
 
-The copied runtime currently fails non-ancestor shared table references, even
-for one shared object. The same defect also affects larger graphs. The test is
-kept red intentionally so the new implementation has an executable acceptance
-case for the issue documented in `DESIGN.md`.
+This target is green and runs the same shared-reference test included in the
+default suite. It remains as a focused entry point for the defect documented in
+`DESIGN.md` and `PROBLEM.md`.

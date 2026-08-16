@@ -26,6 +26,26 @@ assert_equal(decoded_binary, binary, "binary string round trip")
 assert_equal(output.enabled, true, "boolean round trip")
 assert_equal(output.nested.answer, 42, "nested table round trip")
 
+local numeric_keys = {
+    [1] = "array",
+    [1.25] = "fractional",
+}
+
+ptr, size = service.pack(numeric_keys)
+local decoded_numeric_keys = service.unpack_remove(ptr, size)
+assert_equal(decoded_numeric_keys[1], "array", "integer array key")
+assert_equal(decoded_numeric_keys[1.25], "fractional", "fractional hash key")
+
+local projected = setmetatable({}, {
+    __pairs = function()
+        return next, { visible = "metapairs" }, nil
+    end,
+})
+
+ptr, size = service.pack(projected)
+local decoded_projected = service.unpack_remove(ptr, size)
+assert_equal(decoded_projected.visible, "metapairs", "__pairs serialization")
+
 local cycle = { name = "cycle" }
 cycle.self = cycle
 

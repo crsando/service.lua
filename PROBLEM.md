@@ -4,7 +4,7 @@
 >
 > 基线：从 `lservice3` 复制的兼容实现
 >
-> 更新日期：2026-08-15
+> 更新日期：2026-08-16
 >
 > 设计方案：参见 [DESIGN.md](DESIGN.md)
 
@@ -51,8 +51,9 @@
 | MEM-002 | P1 | FIXED | async callback 读取内部 batch 标记并恢复原 stack top |
 | LIFE-001 | P1 | PARTIAL | 已 retire/pin/drain/free；pool GC 和资源计数待补 |
 | LIFE-002 | P1 | FIXED | quit 只请求停止，由 control async 有序关闭 |
-| SER-001 | P1 | KNOWN-FAIL | 普通共享 table 引用无法解码 |
+| SER-001 | P1 | FIXED | 普通共享 table 引用已按 ltask 引用协议恢复解码 |
 | SER-002 | P1 | OPEN | 解码和 remove 信任任意裸指针及内部长度 |
+| SER-003 | P2 | FIXED | LuaJIT 迁移曾把 fractional numeric key 误判为数组 key |
 | GATE-001 | P1 | OPEN | gateway 当前请求链路不可工作 |
 | GATE-002 | P1 | OPEN | gateway 暴露任意 actor/method 且无鉴权边界 |
 | LIMIT-001 | P2 | FIXED | ID 限定为 `0..31`，失败不消耗 next_id |
@@ -324,9 +325,9 @@ handler 调用 `service.quit` 时立即进入 `_stop`。C stop 在当前 libuv c
 ### SER-001：共享 table 引用无法解码
 
 - 严重程度：`P1`
-- 状态：`KNOWN-FAIL`
+- 状态：`FIXED`
 - 证据：[src/lua-seri.c:697](src/lua-seri.c#L697)
-- 回归测试：[tests/regression/serializer_shared_ref_spec.lua](tests/regression/serializer_shared_ref_spec.lua)
+- 回归测试：[tests/lua/serializer_shared_ref_spec.lua](tests/lua/serializer_shared_ref_spec.lua)
 
 扩展引用解码先从 ref table 取出对象，然后在对象类型为 table 时反而抛出 `Invalid ref object id`：
 
@@ -344,7 +345,18 @@ if (lua_type(L, -1) == LUA_TTABLE)
 make test-regression
 ```
 
-当前预期结果：失败并输出 `Invalid ref object id 2`。修复后该目标必须通过，并保留 1、31、32、33、1000 个共享对象测试。
+LuaJIT 5.1 的 `lua_rawgeti` 不返回压栈值类型，移植代码改为调用后再执行 `lua_type`，但曾把有效条件写反。现在只有取出的对象不是 table 时才报错。共享引用测试进入默认绿色套件，覆盖顶层参数、table key/value、混合循环图，以及 1、31、32、33、1000 个共享对象。
+
+### SER-003：fractional numeric key 被误判为数组 key
+
+- 严重程度：`P2`
+- 状态：`FIXED`
+- 证据：[src/lua-seri.c:298](src/lua-seri.c#L298)
+- 回归测试：[tests/lua/serializer_spec.lua](tests/lua/serializer_spec.lua)
+
+Lua 5.4 通过 `lua_isinteger` 判断 hash 遍历得到的 numeric key 是否已经写入 array part。LuaJIT 5.1 没有 integer subtype；旧移植直接调用 `lua_tointeger`，会把 `1.25` 等 fractional key 转换成相邻整数并错误跳过，造成字段丢失。
+
+现在先确认 number 位于 `1..array_size`，再要求转换后的 `lua_Integer` 精确还原为同一个 `lua_Number`，只有真正的正整数数组键才会跳过。`TEST_SERI` 模块入口也已补齐 LuaJIT 的 `LUAMOD_API` 和 `luaL_checkversion` 兼容，并由 contract target 编译、加载验证。
 
 其他序列化风险：
 
@@ -449,7 +461,8 @@ registry 分配固定 32 字节 key，随后使用无边界 `strcpy`。当前 re
 
 当前新增测试：
 
-- [tests/lua/serializer_spec.lua](tests/lua/serializer_spec.lua)：普通值、二进制字符串、嵌套 table、循环引用。
+- [tests/lua/serializer_spec.lua](tests/lua/serializer_spec.lua)：普通值、二进制字符串、numeric key、`__pairs`、嵌套 table 和循环引用。
+- [tests/lua/serializer_shared_ref_spec.lua](tests/lua/serializer_shared_ref_spec.lua)：共享 table 的阈值边界、顶层参数、key/value identity 和混合循环图。
 - [tests/lua/lifecycle_spec.lua](tests/lua/lifecycle_spec.lua)：最小 service 启动、dispatch 和退出。
 - [tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)：managed coroutine 校验、uint32 session 回绕和同 service RPC。
 - [tests/lua/rpc_cross_service_spec.lua](tests/lua/rpc_cross_service_spec.lua)：跨 service、多返回值、错误传播、嵌套调用和并发 pending RPC。
@@ -457,7 +470,7 @@ registry 分配固定 32 字节 key，随后使用无边界 `strcpy`。当前 re
 - [tests/lua/mailbox_spec.lua](tests/lua/mailbox_spec.lua)：mailbox full 的 Lua 错误链路。
 - [tests/c/mailbox_test.c](tests/c/mailbox_test.c)：1/2/4/16 producer、FIFO、full、close 和 batch 续调度。
 - [tests/c/service_lifecycle_test.c](tests/c/service_lifecycle_test.c)：pin/free 同步、8 producer stop 竞争、name/ID 上限。
-- [tests/regression/serializer_shared_ref_spec.lua](tests/regression/serializer_shared_ref_spec.lua)：共享引用已知失败。
+- [tests/contract/serializer_module_spec.lua](tests/contract/serializer_module_spec.lua)：LuaJIT 5.1 下独立 serializer 模块的编译、加载和共享引用 smoke test。
 
 仍缺少：
 

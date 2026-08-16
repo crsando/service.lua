@@ -68,12 +68,12 @@ contract 测试应该从重写第一天保持通过。行为契约暂未实现�
 | `make` | 构建 native module | 基线可用 |
 | `make test-contract` | Lua/native/message ABI 表面 | 已建立 |
 | `make test` | 默认基线/稳定测试 | 基线可用 |
-| `make test-regression` | 已知设计回归 | 允许红，逐项转绿 |
+| `make test-regression` | 共享引用历史问题的聚焦回归 | 已转绿并进入默认套件 |
 | `make test-asan` | ASan/UBSan/LSan | 待实现 |
 | `make test-tsan` | mailbox MPSC 与 send-pin/stop/free 并发 | 已建立 |
 | `make lint` | strict C + Lua 静态检查 | 待实现 |
 
-默认 `make test` 最终必须包含 contract、C unit、Lua unit 和不需要外部服务的 integration。known-fail 不进入默认绿色套件。
+默认 `make test` 包含 contract、C unit、Lua unit 和不需要外部服务的 integration。未修复的 known-fail 不进入默认绿色套件；修复后应迁入默认套件，并可保留聚焦 target。
 
 ## Sanitizer
 

@@ -492,7 +492,7 @@ service.lua/
 make
 make test
 make test-contract
-make test-regression       # 旧 serializer 当前预期失败
+make test-regression       # 共享引用历史问题的聚焦回归
 ```
 
 目标构建入口还包括 `test-tsan`、`test-asan`、`lint` 和可重复安装；完成前在下方任务列表保持未勾选。
@@ -549,6 +549,7 @@ make test-regression       # 旧 serializer 当前预期失败
 
 ### 阶段 4：可选安全增强
 
+- [x] 修复 ltask serializer 在 LuaJIT 5.1 适配中的共享引用和 fractional numeric key 问题。
 - [x] 评估 Buffer Registry；当前阶段信任内部消息契约，不引入。
 - [ ] 评估是否需要版本化序列化格式。
 - [ ] 按实际输入边界决定 malformed input 和 fuzz 范围。
