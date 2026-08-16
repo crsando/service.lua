@@ -22,6 +22,7 @@
 | --- | --- |
 | `OPEN` | 问题仍存在于新项目复制的代码中 |
 | `KNOWN-FAIL` | 已有自动化回归用例，当前仍失败 |
+| `ACCEPTED` | 已知行为由当前明确的信任边界接受，不作为当前修复项 |
 | `EXCLUDED` | 原项目存在，但相关敏感或废弃文件没有复制到新项目 |
 | `LEGACY` | 只为追溯保留，不属于默认测试或正式接口 |
 | `FIXED` | 已修复且有自动化测试证明 |
@@ -42,8 +43,8 @@
 | SEC-001 | P0 | EXCLUDED | 原仓库 Git 历史包含明文交易凭据 |
 | CONC-001 | P1 | FIXED | 已使用 spinlock MPSC mailbox 替换 SPSC queue |
 | MSG-001 | P1 | FIXED | mailbox full/closed 已返回错误并释放失败消息 |
-| RPC-001 | P1 | OPEN | handler 异常不会回复错误，`call` 永久挂起 |
-| RPC-002 | P1 | OPEN | RPC 没有启用超时和可靠取消 |
+| RPC-001 | P1 | FIXED | handler/unknown command 通过 `MESSAGE_ERROR` 返回 |
+| RPC-002 | P1 | ACCEPTED | 当前允许 RPC 无限等待，不实现 timeout/cancel |
 | ROUTE-001 | P1 | FIXED | 未知名称返回 nil，不再映射到 root |
 | ROUTE-002 | P1 | FIXED | ID 在 native 边界校验并返回 `SERVICE_NOT_FOUND` |
 | MEM-001 | P1 | FIXED | `message_t` 改为按值传递，不再分配逐消息外壳 |
@@ -56,8 +57,8 @@
 | GATE-002 | P1 | OPEN | gateway 暴露任意 actor/method 且无鉴权边界 |
 | LIMIT-001 | P2 | FIXED | ID 限定为 `0..31`，失败不消耗 next_id |
 | API-001 | P2 | OPEN | 多个 Lua 公共 API 参数转发或默认值错误 |
-| RPC-003 | P2 | OPEN | session ID 回绕和 C/Lua 位宽没有处理 |
-| PROTO-001 | P2 | OPEN | system/signal/error 等消息类型没有完整分派 |
+| RPC-003 | P2 | FIXED | session 在 uint32 范围安全回绕并跳过 pending ID |
+| PROTO-001 | P2 | FIXED | REQUEST/RESPONSE/ERROR 使用显式 type/session 分派 |
 | LIFE-003 | P2 | PARTIAL | 基本初始化失败已回滚，完整故障注入矩阵待补 |
 | NET-001 | P2 | OPEN | TCP 输入 buffer 无上限，默认绑定所有网卡 |
 | REG-001 | P2 | OPEN | registry key 使用无边界 `strcpy` |
@@ -164,7 +165,7 @@ gateway 默认绑定 `0.0.0.0`，并把客户端提供的 `actor` 和 `method` �
 - 每次失败泄漏消息和 payload。
 - 上层无法做重试、限流或错误响应。
 
-mailbox 现在返回 `OK/FULL/CLOSED`。push 失败时 native binding 释放 payload 并向 Lua 返回错误；`call` 在 yield 前抛错。
+mailbox 现在返回 `OK/FULL/CLOSED`。push 失败时 native binding 释放 payload 并向 Lua 返回错误；`call` 在登记 pending 和 yield 前返回 `nil, error_msg`。
 
 ### MEM-001：每条消息泄漏 `message_t`
 
@@ -194,45 +195,36 @@ callback 现在保存进入时的 stack top，使用 0 个 Lua 返回值，并�
 ### RPC-001：handler error 不会形成 `MESSAGE_ERROR`
 
 - 严重程度：`P1`
-- 状态：`OPEN`
-- 证据：[lua/lservice3.lua:182](lua/lservice3.lua#L182)、[lua/lservice3.lua:199](lua/lservice3.lua#L199)、[lua/lservice3.lua:359](lua/lservice3.lua#L359)
+- 状态：`FIXED`
+- 修复：[lua/lservice3.lua](lua/lservice3.lua)、[tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)
 
-request coroutine 使用 `pcall` 捕获错误后只 `print("ERROR", err)`，随后清理部分 coroutine 元数据。它没有向原请求方发送 `MESSAGE_ERROR`。未知命令也走同一失败路径。
-
-调用方的 session 仍保留在 `session_coroutine_suspend_lookup` 中，并永久处于 yield 状态。
-
-另外，[lua/lservice3.lua:300](lua/lservice3.lua#L300) 的错误响应分支调用了未定义的 `rethrow_error`。即使 C 层未来发送错误，当前 Lua 层也不能可靠处理。
-
-解决方向：
-
-- 所有 handler error、unknown command 和响应序列化错误都发送 `MESSAGE_ERROR`。
-- 定义稳定错误 payload 和 `rethrow_error`。
-- coroutine resume 失败时清理 session 并回复上游。
+request coroutine 捕获错误后重新抛给 `resume_session`。该层在清理入站 coroutine 的
+from/session 映射前构造 `MESSAGE_ERROR`；table handler 找不到 command 时返回固定的
+`command not found`。调用方 dispatcher 删除 pending 并恢复 coroutine，`service.call`
+返回 `nil, error_msg`。session 0 的单向请求没有等待方，不发送 completion。
 
 ### RPC-002：没有默认超时和取消
 
 - 严重程度：`P1`
-- 状态：`OPEN`
-- 证据：[lua/lservice3.lua:271](lua/lservice3.lua#L271)、[lua/lservice3.lua:305](lua/lservice3.lua#L305)
+- 状态：`ACCEPTED`
+- 证据：[lua/lservice3.lua:299](lua/lservice3.lua#L299)、[lua/lservice3.lua:331](lua/lservice3.lua#L331)
 
-当前 `service.call` 没有 timer；旧的 timeout 实现整体被注释。目标停止、消息丢失、未知命令或 handler 异常都会让 coroutine 永久等待。
+当前 `service.call` 不创建 timer。未知命令和 handler 异常已由 ERROR 完成；目标在接受请求后停止、
+消息或 completion 丢失仍会让 coroutine 永久等待。
 
-解决方向：
+当前决定：允许 `service.call` 无限期等待。目标保证 RESPONSE/ERROR 成功进入调用方 mailbox，
+且在发送 completion 前不会停止；timeout、取消和迟到响应处理不是当前实现目标。
 
-- 增加可配置的默认 RPC timeout。
-- 超时原子删除 session，并以错误恢复 coroutine。
-- 迟到响应只能释放 payload，不能再次恢复 coroutine。
-- service 停止时取消其所有 pending RPC 和 sleep。
-
-### RPC-003：session ID 回绕没有处理
+### RPC-003：session ID 安全回绕
 
 - 严重程度：`P2`
-- 状态：`OPEN`
-- 证据：[lua/lservice3.lua:177](lua/lservice3.lua#L177)、[src/message.h:7](src/message.h#L7)
+- 状态：`FIXED`
+- 证据：[lua/lservice3.lua:195](lua/lservice3.lua#L195)、[tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)
 
-Lua 的 `session_id` 无限制递增，C 消息字段是 `unsigned int`。超过 32 位后 C 会截断 session，但 Lua lookup table 仍用未截断数值作为 key，响应无法找到原 coroutine。更长期还会遇到 Lua number 精度边界。
+旧实现的 `session_id` 无限制递增；超过 uint32 后 native binding 会拒绝请求，调用方无法继续发起 RPC。
 
-解决方向：使用明确 `uint32_t` 语义、跳过 0；回绕时检查当前 pending table，不能复用仍在等待的 ID。
+当前分配器在 `UINT32_MAX` 后回绕到 1，跳过 0 和 pending table 中仍被占用的 ID。
+回归测试直接覆盖最大值、回绕和占用 ID 跳过。
 
 ## 7. 路由和 ID 问题
 
@@ -388,14 +380,12 @@ make test-regression
 ### PROTO-001：消息类型没有完整分派
 
 - 严重程度：`P2`
-- 状态：`OPEN`
-- 证据：[lua/lservice3.lua:377](lua/lservice3.lua#L377)
+- 状态：`FIXED`
+- 修复：[lua/lservice3.lua](lua/lservice3.lua)、[tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)
 
-dispatch 只显式处理 `MESSAGE_REQUEST`。其他所有消息只要 `session` 非 nil 就被当成响应；Lua 中整数 0 也是真值，因此 session 0 的 system/signal 消息同样进入响应清理路径。
-
-`MESSAGE_ERROR` 没有稳定发送路径，receipt 常量和若干 session table 只是未实现草稿。
-
-解决方向：按 type 明确分派 REQUEST、RESPONSE、ERROR、SYSTEM、SIGNAL；session 0 用数值判断而不是真假判断；未支持类型记录并安全释放 payload。
+dispatcher 显式处理 REQUEST，以及 session 大于 0 的 RESPONSE/ERROR。其他 type/session 组合
+直接释放 payload，不进入 pending lookup。合法 completion 仍需命中 pending session 才恢复
+coroutine；当前可信模型不校验 response 来源，也不处理重复 completion。
 
 ## 12. Gateway 和网络问题
 
@@ -466,7 +456,7 @@ registry 分配固定 32 字节 key，随后使用无边界 `strcpy`。当前 re
 
 - [tests/lua/serializer_spec.lua](tests/lua/serializer_spec.lua)：普通值、二进制字符串、嵌套 table、循环引用。
 - [tests/lua/lifecycle_spec.lua](tests/lua/lifecycle_spec.lua)：最小 service 启动、dispatch 和退出。
-- [tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)：同 service 协程 RPC。
+- [tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)：managed coroutine 校验、uint32 session 回绕和同 service RPC。
 - [tests/lua/mailbox_spec.lua](tests/lua/mailbox_spec.lua)：mailbox full 的 Lua 错误链路。
 - [tests/c/mailbox_test.c](tests/c/mailbox_test.c)：1/2/4/16 producer、FIFO、full 和 close。
 - [tests/c/service_lifecycle_test.c](tests/c/service_lifecycle_test.c)：pin/free 同步、8 producer stop 竞争、name/ID 上限。
@@ -474,7 +464,7 @@ registry 分配固定 32 字节 key，随后使用无边界 `strcpy`。当前 re
 
 仍缺少：
 
-- handler error、unknown target、timeout、late response 测试。
+- 跨 service RPC、多返回值和可信 response 压力测试。
 - pool/bootstrap 资源归零和复杂 luv handle 关闭测试。
 - ASan/UBSan/LSan/Valgrind。
 - gateway 协议和恶意输入测试。
@@ -486,7 +476,7 @@ registry 分配固定 32 字节 key，随后使用无边界 `strcpy`。当前 re
 
 1. 完成 SEC-001 的外部凭据轮换确认。
 2. 补齐 lifecycle 故障注入、复杂 luv handle 关闭和 pool/bootstrap 销毁。
-3. 完成 RPC error/timeout，修复 RPC-001、RPC-002 和 session 回绕。
+3. 在可信 REQUEST/RESPONSE/ERROR 边界内补齐跨 service、多返回值和压力测试。
 4. 用 LSan、长消息测试或资源计数确认消息、Lua 栈和 payload 长期不增长。
 5. 修正其余公共 API contract。
 6. 按需要评估 serializer 安全增强和网络 gateway。
@@ -505,4 +495,4 @@ registry 分配固定 32 字节 key，随后使用无边界 `strcpy`。当前 re
 6. 生命周期/内存问题通过 sanitizer 或资源计数验证。
 7. 没有通过弱化断言、忽略返回值或隐藏日志来制造“通过”。
 
-当前还证明 spinlock MPSC mailbox 在 1/2/4/16 producer 下无丢失、重复或 producer 内乱序，并通过 TSAN 覆盖 send pin 与 retire/close/join 竞争。它仍不证明复杂 luv handle、pool teardown 和 RPC 错误路径可用于生产。
+当前还证明 spinlock MPSC mailbox 在 1/2/4/16 producer 下无丢失、重复或 producer 内乱序，并通过 TSAN 覆盖 send pin 与 retire/close/join 竞争。它仍不证明复杂 luv handle、pool teardown 和可信 RPC 的跨 service 压力路径可用于生产。

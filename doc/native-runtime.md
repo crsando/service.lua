@@ -101,7 +101,7 @@ timestamp level service_id service_name thread_id component event message
 - mailbox length/high watermark。
 - message accepted/rejected/received/dropped/live。
 - buffer live/bytes/owner。
-- pending RPC/success/error/timeout。
+- pending RPC/success；error/timeout 仅在未来放宽可信 RPC 边界后增加。
 - libuv handle created/closed/live。
 - handler duration 和 dispatch batch。
 

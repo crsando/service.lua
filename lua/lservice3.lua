@@ -15,6 +15,7 @@ local uv = require "luv"
 -- constants
 
 local ROOT_ID = 0
+local UINT32_MAX = 4294967295
 
 local MESSAGE_SYSTEM = 0
 local MESSAGE_REQUEST = 1
@@ -27,6 +28,13 @@ local MESSAGE_RECEIPT_DONE = 1
 local MESSAGE_RECEIPT_ERROR = 2
 local MESSAGE_RECEIPT_BLOCK = 3
 local MESSAGE_RECEIPT_RESPONCE = 4
+
+local CALL_SEND_ERROR = {
+    SERVICE_NOT_FOUND = "service not found",
+    SERVICE_STOPPING = "service stopping",
+    SERVICE_STOPPED = "service stopped",
+    MAILBOX_FULL = "mailbox full",
+}
 
 
 -- preserved internal parameters
@@ -185,10 +193,48 @@ local session_coroutine_where = {}
 local session_coroutine_suspend = {}
 local session_coroutine_response = {}
 local session_coroutine_address = {}
-local session_id = 1
+local next_session_id = 1
+local managed_coroutines = setmetatable({}, { __mode = "k" })
 
 local session_waiting = {}
 local wakeup_queue = {}
+
+local function allocate_session()
+    local first = next_session_id
+
+    repeat
+        local session = next_session_id
+        next_session_id = session == UINT32_MAX and 1 or session + 1
+        if session_coroutine_suspend_lookup[session] == nil then
+            return session
+        end
+    until next_session_id == first
+
+    error("RPC_SESSION_EXHAUSTED", 2)
+end
+
+local function error_message(errobj)
+    if type(errobj) == "string" then
+        return errobj
+    end
+
+    local ok, message = pcall(tostring, errobj)
+    if ok and type(message) == "string" then
+        return message
+    end
+    return "handler error"
+end
+
+local function send_error_response(to, session, message)
+    service._send_message(
+        service.pool,
+        service.get_id(),
+        to,
+        session,
+        MESSAGE_ERROR,
+        service.pack(message)
+    )
+end
 
 local function resume_session(co, ...)
 	running_thread = co
@@ -197,8 +243,14 @@ local function resume_session(co, ...)
 	if ok then
 		return errobj
 	end
+    local from = session_coroutine_address[co]
+    local session = session_coroutine_response[co]
+
     session_coroutine_address[co] = nil
     session_coroutine_response[co] = nil
+    if from ~= nil and type(session) == "number" and session > 0 then
+        send_error_response(from, session, error_message(errobj))
+    end
 end
 
 service.resume_session = resume_session
@@ -212,9 +264,11 @@ local function new_thread(f)
             -- print(">>> coroutine begin", f, inspect{...})
             local ok, err = pcall(f, ...)
             if not ok then print("ERROR", err) end
+            if not ok then error(err, 0) end
             -- print(">>> coroutine end")
         end)
 
+    managed_coroutines[co] = true
     table.insert(coroutine_pool, co)
 
 	return co
@@ -280,15 +334,22 @@ function service.loopback(...)
 end
 
 function service.call(id, ...)
+    local caller = running_thread
+    if caller == nil or not managed_coroutines[caller] then
+        error("service.call must be called from a managed service coroutine", 2)
+    end
+
     if type(id) == "string" then
         id = service.lookup(id)
     end
 
-    if type(id) ~= "number" then
-        error("SERVICE_NOT_FOUND", 2)
+    if type(id) ~= "number" or id < 0 or id > UINT32_MAX or id % 1 ~= 0 then
+        return nil, "service not found"
     end
 
-    -- print("begin service.call:", id, session_id + 1)
+    local session_id = allocate_session()
+
+    -- print("begin service.call:", id, session_id)
     local ok, err = service._send_message(
         service.pool,
         service.get_id(), -- from
@@ -298,60 +359,24 @@ function service.call(id, ...)
         service.pack(...)
     )
     if not ok then
-        error(err, 2)
+        return nil, CALL_SEND_ERROR[err] or err
     end
 
-	session_coroutine_suspend_lookup[session_id] = running_thread
-	session_id = session_id + 1
+    session_coroutine_suspend_lookup[session_id] = caller
 
     -- print("begin service.call yield_session:", id)
 	local type, session, msg, sz = yield_session()
     -- print("service.call get response from")
 	if type == MESSAGE_RESPONSE then
 		return service.unpack_remove(msg, sz)
+	elseif type == MESSAGE_ERROR then
+        local message = service.unpack_remove(msg, sz)
+        return nil, message
 	else
-		-- type == MESSAGE_ERROR
-		rethrow_error(2, service.unpack_remove(msg, sz))
+        service.remove(msg, sz)
+        return nil, "invalid response type"
 	end
 end
-
-
--- test purpose
---[[
-function service.call_timeout(timeout, id, ...)
-    -- print("begin service.call:", id, session_id + 1)
-    service._send_message(
-        service.pool,
-        service.get_id(), -- from
-        id,  -- to
-        session_id,
-        MESSAGE_REQUEST,
-        service.pack(...)
-    )
-
-	session_coroutine_suspend_lookup[session_id] = running_thread
-	session_id = session_id + 1
-
-    local timer = service.uv.new_timer()
-    local co = service.get_session()
-    timer:start(timeout, 0, function()
-            service.resume_session(co, -1)
-        end)
-
-    -- print("begin service.call yield_session:", id)
-	local type, session, msg, sz = yield_session()
-    -- print("service.call get response from")
-	if type == MESSAGE_RESPONSE then
-		return service.unpack_remove(msg, sz)
-    elseif type == -1 then
-        return -1, "timed out"
-	else
-		-- type == MESSAGE_ERROR
-		rethrow_error(2, service.unpack_remove(msg, sz))
-	end
-end
-]]
-
 
 function service.get_session()
     return running_thread
@@ -381,8 +406,7 @@ function service.dispatch(request_handler)
             request = function (command, ...)
                 local s = request_handler[command]
                 if not s then
-                    error("Unknown request message : " .. command)
-                    return
+                    error("command not found", 0)
                 end
                 send_response(s(...))
             end
@@ -397,6 +421,9 @@ function service.dispatch(request_handler)
         while msg and not quit do
             local from, to, session, type, msg, sz = service.recv_message(true) -- blocking
             -- print("recv_message", from, to, session, type, msg, sz)
+            if from == nil then
+                break
+            end
             -- if a request is received
             if type == MESSAGE_REQUEST then
                 local co = new_session(function (type, msg, sz)
@@ -404,7 +431,7 @@ function service.dispatch(request_handler)
                     end, from, session)
                 resume_session(co, type, msg, sz)
             -- on response, resume the previous session
-            elseif session then
+            elseif (type == MESSAGE_RESPONSE or type == MESSAGE_ERROR) and session > 0 then
                 local co = session_coroutine_suspend_lookup[session]
                 if co == nil then
                     service.remove(msg, sz)
@@ -413,7 +440,7 @@ function service.dispatch(request_handler)
                     resume_session(co, type, session, msg, sz)
                 end
             else
-                break -- break while true
+                service.remove(msg, sz)
             end
         end
 

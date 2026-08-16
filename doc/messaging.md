@@ -15,7 +15,8 @@ typedef struct message {
 } message_t;
 ```
 
-`session == 0` 表示单向消息。REQUEST/RESPONSE/ERROR 使用相同非零 session 配对。
+`REQUEST + session == 0` 表示单向消息。RPC 使用 REQUEST 与相同非零 session 的
+RESPONSE/ERROR 配对；RESPONSE 表示成功，ERROR 表示失败。
 
 ## Mailbox
 
@@ -84,7 +85,7 @@ pin 是 runtime 的短期生存期引用，不属于 payload，不随消息进�
 
 - 消息已经被 runtime 接受，发送 API 返回成功，不能声称“目标绝不会处理”。
 - 记录 runtime fault 并请求目标进入 STOPPING。
-- stop drain 销毁消息或向 RPC 来源回复错误。
+- stop drain 销毁消息；当前不向 RPC 来源补发错误。
 - metrics 增加 notify failure，不能增加普通 mailbox rejection。
 
 ## 接收和批处理
@@ -131,7 +132,7 @@ inbox async callback：
 - 单个发送线程对同一目标按成功 push 顺序 FIFO。
 - 同一个 Lua service 的发送发生在单线程，因此天然满足 producer order。
 - 多 producer 的全局顺序由获取 mailbox lock 的顺序决定，不保证可重复。
-- RESPONSE 可以与后续 REQUEST 交错，session 而非位置决定匹配。
+- RESPONSE/ERROR 可以与后续 REQUEST 交错，session 而非位置决定匹配。
 - send 不提供处理完成确认；需要结果时使用 call。
 
 ## Backpressure
@@ -139,7 +140,7 @@ inbox async callback：
 mailbox 满时立即返回 `MAILBOX_FULL`，第一版不阻塞 producer，也不覆盖旧消息。
 
 - `send` 返回 `nil, MAILBOX_FULL`。
-- `call` 在 yield 前清理 pending session/timer 并抛错。
+- `call` 在登记 pending 和 yield 前返回 `nil, "mailbox full"`；失败 payload 由 native send 路径释放。
 - runtime 记录 mailbox high watermark 和 rejection count。
 - 业务可选择重试、丢弃、限速或切换到 RPC；runtime 不暗中重试以免破坏顺序和放大负载。
 
@@ -149,9 +150,9 @@ mailbox 满时立即返回 `MAILBOX_FULL`，第一版不阻塞 producer，也不
 
 drain 在不持有 mailbox lock 的情况下处理弹出的私有 message：
 
-- REQUEST 且 session > 0：尝试发送 `SERVICE_STOPPED`。
+- REQUEST 且 session > 0：记录/drop；这表示目标违反了必须在停止前完成已接受 call 的可信 RPC 契约。
 - REQUEST 且 session == 0：记录/drop。
-- RESPONSE/ERROR：释放 payload；来源 service 自己的 shutdown 会取消 pending RPC。
+- RESPONSE/ERROR：释放 payload；当前不恢复 pending RPC。
 - SYSTEM/SIGNAL：按 control contract 处理或释放。
 
 ## 资源计数

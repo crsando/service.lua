@@ -54,7 +54,7 @@ service 是隔离和调度单元。每个 service：
 - `send` 返回 `true` 表示消息已被运行时接受并转移所有权，不表示 handler 已经执行。
 - `send` 返回 `nil, error` 表示消息未被目标接受，目标以后也不能处理该消息。
 - mailbox full、目标不存在或目标停止都必须显式失败。
-- 一次 RPC 最终必须得到 response、error 或 timeout，不能永久等待。
+- 当前 RPC 采用可信 completion 模型：请求被接受后，目标业务代码和运行时环境保证最终成功投递一个 RESPONSE 或 ERROR；调用方允许无限期等待。
 
 入队成功后的 `uv_async_send` 异常属于目标 runtime fault。它不能把已经接受的消息重新报告为“未投递”；运行时必须进入故障停止流程，销毁或错误回复邮箱中的消息。
 
@@ -68,7 +68,7 @@ NEW -> STARTING -> RUNNING -> STOPPING -> STOPPED -> JOINED -> FREED
 
 初始化失败记录 `start_error` 并从 `STARTING` 进入 `STOPPED`。`FREED` 表示运行资源已释放；公开 handle 的验证元数据可以继续作为 tombstone 存在。
 
-停止是协作式过程：先禁止新路由并关闭邮箱，等待 send pin 归零，再由 control async 在目标线程关闭 libuv handle，最后 join pthread。当前阶段会销毁尚未处理的 payload；挂起 RPC/sleep 的错误恢复属于阶段 3。运行时不能强制抢占一个永不 yield 的 Lua handler，因此关闭超时只能报告失去响应，不能在其线程仍运行时释放 pool 或 service 内存。
+停止是协作式过程：先禁止新路由并关闭邮箱，等待 send pin 归零，再由 control async 在目标线程关闭 libuv handle，最后 join pthread。当前阶段会销毁尚未处理的 payload，不恢复挂起的 RPC/sleep。可信 RPC 目标不得在发送 completion 前停止；运行时不能强制抢占一个永不 yield 的 Lua handler。
 
 详细流程见 [生命周期设计](doc/lifecycle.md)。
 
@@ -261,15 +261,18 @@ service.recv_message(blocking) -> from, to, session, message_type, ptr, size
 ### RPC
 
 ```lua
-service.call(id_or_name, ...) -> ...
+service.call(id_or_name, ...) -> ... | nil, error_msg
 ```
 
 - 只能在运行时管理的 service coroutine 中调用。
-- 目标和 session 在发送前完成验证和登记。
-- response 返回全部值，包括中间或末尾 nil。
-- error 以普通 Lua error 重抛。
-- 默认超时 30 秒；`service.config.rpc_timeout_ms = 0` 可显式禁用。
-- timeout 后迟到响应只释放 payload，不得再次恢复 coroutine。
+- 调用上下文和目标在发送前完成验证；session 在当前 service 内分配，请求成功发送后登记等待 coroutine。
+- `MESSAGE_RESPONSE` 返回 handler 的全部返回值，包括中间或末尾 nil。
+- 请求被 mailbox 接受前遇到目标不存在、目标停止或 mailbox full 时，不登记 pending、不 yield，返回 `nil, error_msg`。
+- 请求被接受后，command 不存在或 handler 抛错时，目标发送 `MESSAGE_ERROR`；调用方返回 `nil, error_msg`。
+- 失败返回的第一个值必须是 nil，而不是数值 0，因此可使用 `assert(service.call(...))` 向上层传播错误。
+- 当前信任 response/error completion 一定成功进入调用方 mailbox；发送失败时不重试。
+- 当前不实现 timeout 或取消；目标停止、completion 丢失或协议违约时 `call` 可以无限期等待。
+- response/error 只按 session 匹配；业务代码不得伪造、重复或以错误来源发送 completion。
 
 session 是每 service 独立的非零 `uint32_t`。回绕时跳过 0 和仍在等待的 ID。
 
@@ -284,8 +287,9 @@ service.dispatch(handler_table) -> native_handler
 
 - 每个 request 在独立 coroutine 中执行。
 - `session > 0` 时，返回值编码为 `MESSAGE_RESPONSE`。
-- unknown command、handler error 和 response serialize error 编码为 `MESSAGE_ERROR`。
-- session 0 的 handler error 只记录日志。
+- table handler 找不到 command 时返回 `MESSAGE_ERROR`，错误字符串为 `command not found`。
+- handler coroutine 抛错时，`session > 0` 返回携带单个错误字符串的 `MESSAGE_ERROR`；`session == 0` 没有等待方，不发送 completion。
+- 低层消息发送方被视为可信，只发送符合下文 type/session 规则的消息。
 - 每次 inbox callback 默认最多处理 256 条消息，之后重新唤醒以保证 timer/socket 公平性。
 
 ### Coroutine 和 timer
@@ -297,16 +301,16 @@ service.get_session() -> coroutine|nil
 返回当前由 runtime 恢复的 coroutine；普通 luv callback 或 standalone 上下文返回 nil。
 
 ```lua
-service.resume_session(co, ...) -> true, ... | false, error
+service.resume_session(co, ...) -> internal result
 ```
 
-兼容的受管 coroutine 恢复入口，结果形式与 `coroutine.resume` 一致。runtime 内部必须在失败时清理 session 元数据并向上游 RPC 回复错误。
+兼容保留的 runtime 内部恢复入口。业务代码不得在正在运行的 handler 内手动恢复另一个 coroutine；当前不保证这种嵌套调用下的 `running_thread` 或返回结果语义。
 
 ```lua
 service.sleep(milliseconds) -> nil
 ```
 
-只能在 service coroutine 中调用。停止时尚未完成的 sleep 被取消并以 `SERVICE_STOPPED` 恢复或在 teardown 中统一释放。
+只能在 service coroutine 中调用。停止时尚未完成的 timer 在 teardown 中关闭；当前不恢复 suspended sleep coroutine。
 
 ```lua
 service.set_timeout(milliseconds, callback) -> luv_timer
@@ -366,7 +370,7 @@ service.remove(ptr, size) -> nil
 | `unpack_remove` | `(ptr, size?)` | 解包后的全部值并释放 ptr |
 | `remove` | `(ptr, size)` | 无返回值 |
 
-错误返回使用稳定短码：
+低层 native API 和 `service.send` 使用以下稳定短码：
 
 | code | 含义 |
 | --- | --- |
@@ -375,10 +379,19 @@ service.remove(ptr, size) -> nil
 | `SERVICE_STOPPING` | 目标正在停止 |
 | `SERVICE_STOPPED` | 目标已停止或等待期间停止 |
 | `MAILBOX_FULL` | mailbox 达到容量 |
-| `UNKNOWN_COMMAND` | handler table 无命令 |
-| `HANDLER_ERROR` | handler 抛出 Lua error |
-| `SERIALIZE_ERROR` | 请求或响应不能序列化 |
-| `RPC_TIMEOUT` | RPC 超时 |
+
+`service.call` 不把目标拒绝当作 Lua throw，而是映射成适合 `nil, error_msg` 的稳定英文字符串：
+
+| native send error | `service.call` error_msg |
+| --- | --- |
+| `SERVICE_NOT_FOUND` | `service not found` |
+| `SERVICE_STOPPING` | `service stopping` |
+| `SERVICE_STOPPED` | `service stopped` |
+| `MAILBOX_FULL` | `mailbox full` |
+
+已接受请求的框架错误字符串固定使用英文 ASCII。未知 command 返回 `command not found`；
+非字符串 handler error 无法安全转换时返回 `handler error`。handler 主动抛出的字符串作为
+应用错误原样向上传递。
 
 ## 消息 ABI
 
@@ -396,6 +409,25 @@ typedef enum message_type {
     MESSAGE_SIGNAL   = 4,
 } message_type_t;
 ```
+
+Lua dispatcher 使用显式的 type/session 正向判定：
+
+| message type | session 规则 | 当前处理逻辑 |
+| --- | --- | --- |
+| `MESSAGE_SYSTEM` | 任意 | 暂未实现，释放 payload；保留给未来 `service.syscall`/quit 等管理命令 |
+| `MESSAGE_REQUEST` | `0` | `service.send` 单向请求；创建 handler coroutine，不发送 completion |
+| `MESSAGE_REQUEST` | `> 0` | `service.call` 请求；正常返回 RESPONSE，command/handler 失败返回 ERROR |
+| `MESSAGE_RESPONSE` | `> 0` | 成功 completion；按 session 恢复 pending caller |
+| `MESSAGE_ERROR` | `> 0` | 失败 completion；按 session 恢复 caller 并返回 `nil, error_msg` |
+| `MESSAGE_SIGNAL` | 任意 | 暂未实现，释放 payload |
+
+`MESSAGE_RESPONSE/MESSAGE_ERROR + session == 0`、未知 type 以及其他不支持的组合都只释放
+payload，不能进入 pending lookup。合法 completion 仍需命中 pending session 才能恢复 coroutine；
+找不到 session 时释放 payload。当前不验证 completion 的 `from` 是否与原 target 相同。
+
+请求在进入目标 mailbox 前失败时没有创建远端会话，因此错误由发送端 `service.call` 直接返回，
+不会构造 `MESSAGE_ERROR`。请求被接受后发生的 command/handler error 才使用原非零 session 发送
+`MESSAGE_ERROR`。ERROR 与 RESPONSE 使用相同 mailbox 和投递能力；当前假设两者必达，发送失败时忽略。
 
 内部 message 的语义字段固定为：
 
@@ -499,12 +531,15 @@ make test-regression       # 旧 serializer 当前预期失败
 
 ### 阶段 3：Lua 调度、RPC 和 timer
 
-- [ ] 重写 send/call/dispatch/session 调度层。
-- [ ] 实现 `MESSAGE_ERROR`、unknown command 和 traceback。
-- [ ] 实现 RPC timeout、取消、迟到/重复响应处理。
-- [ ] 实现 uint32 session 安全回绕。
+- [x] 明确可信接收方、completion 必达和允许无限等待的 RPC 边界。
+- [x] 限制 `call` 只能从 runtime 管理的 coroutine 发起。
+- [x] 实现 uint32 session 安全回绕并跳过 pending ID。
+- [x] 显式分派 REQUEST/RESPONSE/ERROR，其他 type/session 组合释放 payload。
+- [x] 将 unknown command 和 handler coroutine error 通过 `MESSAGE_ERROR` 返回调用方。
+- [ ] 在可信 REQUEST/RESPONSE/ERROR 边界内补齐跨 service 和多返回值测试。
+- [ ] 若未来放宽 completion 必达假设，再实现 timeout、取消、来源校验和迟到/重复响应处理。
 - [ ] 实现 dispatch batch 和 timer/socket 公平性。
-- [ ] 停止时取消 sleep、出站 RPC 和挂起入站 handler。
+- [ ] 停止时清理 sleep；RPC 停止取消只在未来放宽信任假设后实现。
 - [x] inbox C -> Lua callback 使用零返回值并恢复进入时 stack top。
 
 ### 阶段 4：可选安全增强
@@ -536,5 +571,6 @@ make test-regression       # 旧 serializer 当前预期失败
 - [原生运行时与 libuv](doc/native-runtime.md)
 - [测试和验收策略](doc/testing.md)
 - [Skynet 消息系统研究](doc/skynet-analysis.md)
+- [ltask 调度与消息模型研究](doc/ltask-analysis.md)
 
 `README.md` 是公开 API/ABI 和任务状态的规范入口；`doc/` 描述内部实现约束；`DESIGN.md` 保留为最初的合并设计稿。三者冲突时，新代码以 README 的公开契约和对应模块文档为准。

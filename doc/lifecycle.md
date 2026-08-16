@@ -85,6 +85,11 @@ service pthread：
 3. STARTING 时初始化线程在每个主要阶段检查请求；不再发布 RUNNING。
 4. 不在调用 `quit` 的 Lua callback 内执行 `uv_run`、`uv_walk` 或 `uv_loop_close`。
 
+`MESSAGE_SYSTEM`/`service.syscall` 暂未实现，但保留为未来从其他 service 请求目标执行协作式
+`quit` 的候选入口。该入口只能在目标 Lua VM 内触发现有 stop request，不能另建关闭流程或在
+SYSTEM handler 中直接销毁 loop/VM。若使用非零 session 请求 quit，需要先发送确认 response，
+再让 control async 在 callback 返回后的安全边界进入 STOPPING；具体协议在实现前另行确定。
+
 ## RUNNING -> STOPPING
 
 在 service pthread 的安全 callback 边界执行：
@@ -93,21 +98,20 @@ service pthread：
 2. 发布 STOPPING。
 3. 关闭 mailbox，等待已经取得的 send pin 完成；pin 必须覆盖 `mailbox_try_push` 和 `uv_async_send`。
 4. 让当前正在执行且未 yield 的 handler 返回到 dispatcher 边界。
-5. 当前 handler 正常返回时，可先发送其 response；若它再次 yield，则按取消处理。
+5. 当前 handler 结束时，可先发送 RESPONSE 或 ERROR；可信 RPC handler 不得在发送 completion 前请求停止后再次 yield。
 6. 当前阶段直接 drain mailbox 并销毁 payload。
-7. 阶段 3 再取消 suspended sleep/出站 RPC，并对挂起或尚未处理的 RPC 回复 `SERVICE_STOPPED`。
+7. 当前不恢复 suspended RPC，也不对尚未处理的 RPC 回复错误；目标在 completion 前停止属于违反可信 RPC 契约。
 8. C 先关闭自己拥有的 inbox/control async handle；最后一个 native close callback 执行后，这些非-luv handle 已从 loop 移除。
 9. 该 callback 再通过 Lua C API 调用当前 VM 中的 `luv.walk`，对尚未 closing 的 luv handle 调用 luv 自己的 `close`；不保存额外的 Lua function reference。随后继续运行 loop，直到 close callback 全部完成。
 
-错误回复本身可能因来源停止或 mailbox full 失败。失败只能记录并释放错误 payload；来源 RPC 最终由 timeout 或来源 shutdown 结束。
+当前 RPC 不依赖关闭错误回复或 timeout 收尾。业务必须保证目标完成已经接受的 call 后再停止。
 
 ## Coroutine 取消
 
 LuaJIT 2.1 没有通用的强制 coroutine close：
 
-- runtime 从 session/timer 表中删除 suspended coroutine。
-- 关闭其 timer/socket 等由 runtime 持有的 handle。
-- 若 coroutine 代表入站 RPC，向原调用方回复 `SERVICE_STOPPED`。
+- 当前不单独恢复或取消 suspended RPC coroutine。
+- 关闭 timer/socket 等由 runtime 持有的 handle。
 - 最终 `lua_close` 回收 coroutine Lua 对象。
 - 不执行 coroutine 中 yield 点之后的业务清理代码；需要外部资源清理的业务必须使用 runtime 管理的 handle 或显式 shutdown handler。
 
@@ -145,7 +149,7 @@ Lua/loop 的精确关闭顺序必须通过有 timer、socket 和 userdata finali
 - handler 内 quit 不再嵌套调用 `uv_run`；control async 在 callback 返回后执行关闭。
 - start 初始化握手、STARTING stop、source 初始化失败、重复 join 和 invalid ID 错误。
 
-当前已覆盖 active timer 和已初始化 TCP handle 的基本关闭；尚未完成的必做项是逐初始化步骤故障注入、pending request/活动 socket/关闭异常路径，以及 RPC/coroutine 取消。pool 的独立 GC/shutdown API 按当前“join root 后进程退出”的运行约束暂缓；任意伪造 lightuserdata 的进程级验证按可信上游假设移到最终可选项。
+当前已覆盖 active timer 和已初始化 TCP handle 的基本关闭；尚未完成的必做项是逐初始化步骤故障注入、pending request/活动 socket 和关闭异常路径。RPC/coroutine 取消在可信接收方模型下不是当前目标。pool 的独立 GC/shutdown API 按当前“join root 后进程退出”的运行约束暂缓；任意伪造 lightuserdata 的进程级验证按可信上游假设移到最终可选项。
 
 ## Root 和进程退出
 

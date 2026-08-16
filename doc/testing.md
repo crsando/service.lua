@@ -40,9 +40,8 @@ contract 测试应该从重写第一天保持通过。行为契约暂未实现�
 
 - pack/unpack value graph。
 - API 参数和错误码。
-- session allocator 和 coroutine metadata。
+- managed coroutine call validation 和 uint32 session allocator。
 - dispatch function/table。
-- error formatting。
 
 ### Integration
 
@@ -50,7 +49,7 @@ contract 测试应该从重写第一天保持通过。行为契约暂未实现�
 - standalone/bootstrap/root/child 生命周期。
 - send、self-call、cross-service call、nested call。
 - timer、socket、stop 和 join。
-- handler error、timeout、late response。
+- managed coroutine validation、session 回绕和可信 response happy path。
 
 ### Stress
 
@@ -146,7 +145,7 @@ bootstrap 成功结束后除明确 process-lifetime 资源外全部为 0。压�
 | uv loop/async init | start 返回根因，线程可 join |
 | Lua/luv/source/handler | mailbox drain，config 释放 |
 | send compose/push/notify | ptr/message 所有权唯一 |
-| response serialize/send | 上游最终 error/timeout |
+| completion serialize/send | 当前可信路径成功投递；故障行为在未来扩大边界后定义 |
 
 ## 发布门槛
 
@@ -156,6 +155,6 @@ bootstrap 成功结束后除明确 process-lifetime 资源外全部为 0。压�
 - TSAN 16 producer 无 race/丢失/重复。
 - ASan/UBSan/LSan 无未解释问题。
 - 100 万消息资源计数无增长。
-- 所有 RPC 终止为 response/error/timeout。
+- 可信前置条件成立时，所有已接受 RPC 最终得到 response。
 - shutdown 后 runtime 资源归零。
 - 仓库无凭据、二进制产物或未说明许可证代码。

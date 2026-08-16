@@ -1,179 +1,129 @@
 # RPC、Coroutine 与调度
 
+> 当前状态：REQUEST 可以由 RESPONSE 或 ERROR 完成。timeout、取消、completion
+> 来源校验、投递重试和停止恢复不属于当前实现目标。
+
+## 当前信任模型
+
+当前 RPC 建立在以下约束上：
+
+1. 请求被 mailbox 接受后，目标 handler 正常返回 RESPONSE，command/handler error 返回 ERROR。
+2. response/error completion 一定能成功进入调用方 mailbox；当前发送端不处理 completion send 失败。
+3. `service.call` 没有 timeout，调用方允许无限期等待。
+4. 业务代码不在 handler 内手动调用 `service.resume_session` 恢复另一个 coroutine。
+5. 低层消息发送方可信，只发送符合约定的 REQUEST/RESPONSE/ERROR，不伪造、重复或错配 session。
+6. response/error 只按 session 匹配，不验证 from/to 或 pending target。
+7. RPC 目标在发送 completion 前不会停止，调用方也不会提前销毁等待 coroutine。
+
+这些约束是当前公开行为的一部分，不是 runtime 已经检测或补偿的条件。违反约束时，
+`service.call` 可以永久等待或丢弃 completion。
+
 ## 调度模型
 
-每个 service 只有一个 pthread 和 Lua VM。inbox、timer、socket callback 都在该线程的 libuv loop 上串行进入 Lua。
-
-每个 REQUEST 创建独立 coroutine：
+每个 service 只有一个 pthread 和 Lua VM。inbox、timer、socket callback 都在该线程的
+libuv loop 上串行进入 Lua。每个 REQUEST 创建独立 coroutine：
 
 ```text
 inbox callback
     -> decode request
-    -> create request coroutine
+    -> create managed coroutine
     -> resume handler
          |-- return: send response
-         `-- yield: register wait state, dispatcher continues
+         `-- call/sleep yield: dispatcher continues
 ```
 
-coroutine 只由所属 service thread 恢复。其他线程只能投递 message 或 async signal，不能调用 `lua_resume`。
+目标线程可以在调用方仍执行 `service.call` 时把 response 入队，但调用方的 Lua VM
+不会并发运行第二个 inbox callback。调用方只有 yield 回 dispatcher 后才会处理
+response，因此当前的“send 成功后登记 session、随后 yield”顺序没有响应抢跑竞态。
 
 ## Coroutine 元数据
 
-Lua 层至少维护：
+当前 Lua 层只依赖两组核心映射：
 
 ```text
 coroutine -> inbound { from, session }
-coroutine -> wait kind { none, rpc, sleep }
-session   -> outbound { coroutine, target, timer, state }
-timer     -> coroutine
+session   -> waiting coroutine
 ```
 
-元数据变更只发生在 service thread，因此 Lua table 本身不需要跨线程锁。每个 terminal path 必须原子地从所有相关表删除记录，避免一个 coroutine 被 timeout 和 response 恢复两次。
-
-建议 outbound state：
-
-```text
-REGISTERED -> SENT -> COMPLETED
-                  `-> TIMED_OUT
-                  `-> CANCELLED
-```
-
-迟到或重复 response 只在找不到 active session 时释放 payload并记录日志。
+`running_thread` 必须是 runtime 创建并登记的 managed coroutine。普通 luv callback、
+standalone 代码和业务自行创建的 coroutine 不能调用 `service.call`。runtime 可以在一个
+handler 因 call/sleep yield 后调度其他 request coroutine；“不支持嵌套 coroutine”特指
+业务代码不得在一个正在运行的 handler 内手动 `resume_session` 另一个 coroutine。
 
 ## Session 分配
 
-- 每个 service 独立维护 `uint32_t next_session`。
-- session 0 永不用于 RPC。
-- 分配从当前值递增，回绕时跳过 0。
-- 候选 ID 已在 pending table 中时继续扫描。
-- pending 已占满全部非零空间时返回资源耗尽错误，不能覆盖旧 session。
-- Lua table key 使用截断后的精确 uint32 数值，C message 与 Lua lookup 必须一致。
+- 每个 service 独立维护精确的非零 uint32 session。
+- session 从 1 递增到 `UINT32_MAX`，下一次回绕到 1，永远不发送 0。
+- 候选 session 已存在于 pending table 时继续扫描，不能覆盖仍在等待的 call。
+- 所有非零 session 都被占用时抛出 `RPC_SESSION_EXHAUSTED`。
+- Lua number 可以精确表示完整 uint32 范围，native binding 在发送边界再次检查范围。
 
 ## `service.call`
 
-调用流程：
+当前调用流程：
 
-1. 确认 `running_thread` 是 runtime 管理的 coroutine。
-2. 解析 name/ID 并验证目标。
-3. 分配非零 session。
-4. 创建 timeout timer；默认 30000 ms，配置 0 时跳过。
-5. 在 pending table 注册 coroutine/session。
-6. pack 请求并调用 native send。
-7. send 失败时删除 pending、关闭 timer、释放 payload并立即抛错。
-8. 标记 wait kind 为 rpc，yield coroutine。
-9. response/error/timeout/cancel 恢复后清理 wait state。
+1. 验证 `running_thread` 是 runtime 管理的 coroutine；失败时在 pack/send 前抛错。
+2. 解析 name/ID，目标格式无效时返回 `nil, "service not found"`。
+3. 分配一个未被 pending table 占用的非零 uint32 session。
+4. pack 请求并调用 native send。
+5. send 失败时立即返回 `nil, error_msg`，不登记 pending。
+6. send 成功后登记 `session -> coroutine`，随后 yield。
+7. dispatcher 收到相同 session 的 RESPONSE/ERROR，删除 pending 并恢复 coroutine。
+8. RESPONSE 解包并返回 handler 的全部值；ERROR 解包后返回 `nil, error_msg`。
 
-注册必须发生在消息可被接收端处理之前。即使当前 loop 的串行性可以减少竞态，也不依赖该偶然顺序。
+当前不创建 RPC timer，也不主动取消已经发送的 request。第一个错误返回值必须是 nil，
+因此 `assert(service.call(...))` 可以把下游错误继续作为当前 handler error 向上传递。
 
-## Request dispatch
+## Request 和 Response
 
 REQUEST payload 的第一个值是 command：
 
-- function handler：调用 `handler(command, ...)`。
-- table handler：查找 `handler[command]` 并调用 `handler_method(...)`。
-- command 不是允许的 key 或 table 中无方法：`UNKNOWN_COMMAND`。
+- function handler 调用 `handler(command, ...)`。
+- table handler 调用 `handler_table[command](...)`。
+- session 0 来自 `service.send`，handler 返回后不发送 response。
+- session 大于 0 来自 `service.call`，handler 的全部返回值自动 pack 为 response。
 
-session 0：
+table handler 找不到 command 时抛出固定的 `command not found`。request coroutine 的错误
+由 `resume_session` 在仍持有 from/session 映射时处理：session 大于 0 时发送只包含一个字符串的
+MESSAGE_ERROR，session 0 没有等待者，不发送 completion。handler 主动抛出的字符串原样传播；
+错误对象转成字符串失败时使用 `handler error`。
 
-- 正常返回时不发送 response。
-- handler error 只记录服务端日志。
+dispatcher 使用正向分派：REQUEST 始终进入新请求路径；只有 RESPONSE/ERROR 且 session 大于 0
+才进入 completion 路径。其他 type/session 组合释放 payload。合法 completion 再按 session 查找
+等待 coroutine，不验证来源；找不到 session 时同样释放 payload。设计依据见
+[ltask 调度与消息模型研究](ltask-analysis.md)。
 
-session > 0：
+response/error 发送调用 native `_send_message` 后不检查结果。当前模型把调用方 mailbox 有空间、
+仍处于 RUNNING 且 completion 入队成功作为前置条件。
 
-- 正常返回的全部值 pack 为 RESPONSE。
-- handler error/unknown command/response pack error 形成 ERROR。
-- response send 失败时记录上游不可达；当前 coroutine 仍完成并释放自身元数据。
+## Stop 和无限等待
 
-## Response dispatch
+`service.call` 允许无限期等待。当前停止流程不会恢复挂起的 outbound call，也不会为
+尚未处理或 suspended 的 inbound RPC 构造 `SERVICE_STOPPED`。因此：
 
-仅按 message type 分派，不能使用 Lua 中 `if session then` 判断，因为 0 也为真：
+- RPC 目标必须在停止前完成已经接受的 call。
+- 调用方必须保持运行直到收到 RESPONSE 或 ERROR。
+- 无 completion、丢失 completion 或提前停止属于违反信任契约，runtime 不做恢复。
 
-- `MESSAGE_RESPONSE`：session 必须非零，查找 active pending，关闭 timer并恢复 coroutine。
-- `MESSAGE_ERROR`：同上，恢复后由 `service.call` 重抛。
-- `MESSAGE_REQUEST`：创建新 request coroutine。
-- `MESSAGE_SYSTEM`：只进入 runtime system handler。
-- `MESSAGE_SIGNAL`：只进入显式 signal handler；未支持时记录并释放。
-- 未知 type：协议错误，释放 payload。
+## 未来可选增强
 
-from/to 必须与当前 service 和 pending target 一致。错误来源的 response 不能完成 session。
+只有信任边界扩大或实际业务需要时，再评估：
 
-## 错误 payload
+- 默认 timeout、取消以及 late/duplicate response 状态。
+- response 的 from/to/target 校验。
+- 跨 service traceback 和结构化错误对象。
+- service stop 时取消 outbound call，并为 inbound/queued RPC 回复 `SERVICE_STOPPED`。
+- 业务手动嵌套 `resume_session` 时的 `running_thread` 栈式恢复。
 
-service 间 ERROR 使用单个 string：
+这些能力不得在没有新需求时扩大当前 RPC 改造范围。
 
-```text
-CODE: human-readable message
-stack traceback:
-    ...
-```
+## 当前必测场景
 
-稳定 code 包括 `UNKNOWN_COMMAND`、`HANDLER_ERROR`、`SERIALIZE_ERROR`、`SERVICE_STOPPED`、`RPC_TIMEOUT`。
-
-- 内部 service 可以获得完整 traceback。
-- 网络 gateway 对外响应必须去掉内部绝对路径和敏感参数。
-- traceback 构造失败时仍要发送最小 `CODE: message`。
-
-## Timeout
-
-timer callback：
-
-1. stop/close timer。
-2. 检查 session 仍处于 SENT。
-3. 删除 pending record。
-4. 标记 TIMED_OUT。
-5. 恢复 coroutine，并让 `service.call` 抛出 `RPC_TIMEOUT`。
-
-response callback 与 timeout callback 在同一 service thread 串行执行，先完成者删除 record，后完成者只释放自己的资源。
-
-timeout 不撤销已经在目标执行的业务操作，因此 call 提供的是 bounded wait，不是事务取消。需要幂等或取消语义的业务协议必须自行携带 request ID。
-
-## Sleep 和 timer
-
-`service.sleep(ms)`：
-
-1. 验证 coroutine 上下文和非负有限 ms。
-2. 创建一次性 luv timer并登记 wait kind。
-3. yield。
-4. timer callback 先 stop/close，再删除 wait record并恢复 coroutine。
-
-`service.set_timeout(ms, callback)` 返回 timer handle，但 runtime 仍包装 callback：
-
-- callback 前 timer 已停止。
-- 无论 callback 成功/失败都关闭 handle。
-- error 通过 runtime logger 记录，不穿过 libuv C callback。
-- service STOPPING 时未触发 timer 统一关闭，不执行普通业务 callback。
-
-## Stop 时的调度
-
-- 停止请求不会抢占当前正在执行的 Lua 指令。
-- 当前 handler 返回到 dispatcher 边界后停止继续取新 request。
-- 当前 handler 若在 stop_requested 后 yield，取消它并按 inbound session 回复错误。
-- suspended outbound call 关闭 timer、删除 session，并以 `SERVICE_STOPPED` 恢复或直接在 VM teardown 前清理。
-- suspended inbound handler 向其调用方回复 `SERVICE_STOPPED`。
-- 关闭期间的 late response 只释放 payload。
-
-## 公平性
-
-- 每次 inbox callback 最多处理 256 条，可配置但有上下限。
-- batch 后 mailbox 非空则再次 async send，让 timer/socket callback 获得运行机会。
-- 一个不 yield 的 handler 仍可无限阻塞 loop；batch 不能解决业务 CPU 饥饿。
-- 指标记录 handler duration、batch size、timer scheduling delay 和 pending RPC count。
-
-## 嵌套调用
-
-`A -> B -> C -> A` 可以工作：A 的第一个 coroutine 等待 B 时，A 的 dispatcher 可以为 C 的请求创建另一个 coroutine。
-
-这不保证业务无死锁。若 handler 在 Lua 层持有逻辑锁、等待不可重入状态或依赖严格执行顺序，仍可能形成循环等待。框架只保证线程不会因为同步 pthread wait 阻塞消息调度。
-
-## 必测场景
-
-- call 多返回值、包含 nil、self-call、跨 service call。
-- handler error、unknown command、response serialize error。
-- target missing/full/stopping/stopped。
-- timeout 与 response 同一 tick 竞争。
-- late、duplicate、unknown session、wrong sender response。
-- session 接近 `UINT32_MAX` 的回绕。
-- stop 取消 sleep、outbound call 和 inbound suspended handler。
-- 嵌套 A/B/C/A 调用。
-- inbox 压力下 timer 延迟有界。
+- 非 managed coroutine 调用 `service.call` 时在发送前失败。
+- session 在 `UINT32_MAX` 后回绕到 1，并跳过 pending ID。
+- self-call、跨 service call。
+- response 多返回值以及中间、末尾 nil。
+- handler error、yield 后 error、unknown command 和 `assert(call)` 传播。
+- type/session 分派矩阵以及 unknown pending session。
+- request send 的 target missing/full/stopping/stopped 错误。
 - callback 前后 Lua stack top 不变。
