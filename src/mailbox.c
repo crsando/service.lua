@@ -106,6 +106,18 @@ mailbox_try_pop(mailbox_t *box, message_t *out) {
     return found;
 }
 
+bool
+mailbox_finish_batch(mailbox_t *box) {
+    bool more;
+
+    spin_lock(&box->lock);
+    more = !box->closed && box->count > 0;
+    if (!more)
+        box->scheduled = false;
+    spin_unlock(&box->lock);
+    return more;
+}
+
 void
 mailbox_close(mailbox_t *box) {
     spin_lock(&box->lock);

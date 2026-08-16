@@ -28,7 +28,7 @@ contract 测试应该从重写第一天保持通过。行为契约暂未实现�
 
 ### C Unit
 
-- mailbox FIFO/full/close/MPSC。
+- mailbox FIFO/full/close/MPSC 和 batch finish/rearm。
 - pool ID/name/stable handle/pin。
 - message ownership。
 - serializer cursor/header/tag/limits。
@@ -48,7 +48,7 @@ contract 测试应该从重写第一天保持通过。行为契约暂未实现�
 - source string 和 `@file`。
 - standalone/bootstrap/root/child 生命周期。
 - send、self-call、cross-service call、nested call。
-- timer、socket、stop 和 join。
+- dispatch 256 条边界、每轮 `on_idle`、timer 公平性、socket、stop 和 join。
 - managed coroutine validation、session 回绕和可信 response happy path。
 
 ### Stress
@@ -132,9 +132,9 @@ bootstrap 成功结束后除明确 process-lifetime 资源外全部为 0。压�
 
 长时间消息测试同时采样 Lua memory，防止每 callback 遗留 nil/result。
 
-## 故障注入矩阵
+## 可选故障注入矩阵
 
-创建/启动每个资源取得步骤都测试失败：
+当前主线假定底层启动步骤成功。未来需要覆盖运行时故障时，再对创建/启动的资源取得步骤逐项注入失败：
 
 | 阶段 | 期望 |
 | --- | --- |

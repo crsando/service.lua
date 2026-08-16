@@ -20,6 +20,8 @@ mailbox_result_t mailbox_try_push(
     mailbox_t *box, const message_t *message, bool *notify);
 /* An empty pop rearms notification for the next successful push. */
 bool mailbox_try_pop(mailbox_t *box, message_t *out);
+/* Completes a full consumer batch; true means the caller must wake again. */
+bool mailbox_finish_batch(mailbox_t *box);
 void mailbox_close(mailbox_t *box);
 /* No thread may enter the mailbox after mailbox_delete begins. */
 void mailbox_delete(mailbox_t *box);

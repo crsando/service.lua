@@ -465,7 +465,8 @@ service.quit() -> nil
 - table config 通过 `service.pack` 传给新 VM。
 - 非 table config 只允许 nil 或由本模块生成的受管 buffer 指针。
 - `spawn` 等价于 `new + start + get_id`。
-- standalone 模式下 `get_id(addr)` 必须返回 addr 的真实 ID，不能无条件返回 0。
+- standalone 是宿主启动上下文，程序只用它执行 `bootstrap/new/start/send/join`，不调用
+  `get_id(addr)` 或 `get_addr(id)`。standalone 无参数 `get_id()` 返回 0 仅用于 root 启动兼容。
 - `quit` 幂等，只请求当前 service 停止。
 
 ### 9.4 查询
@@ -479,7 +480,8 @@ service.get_async([addr]) -> lightuserdata|nil
 service.get_uv_loop([addr]) -> lightuserdata|nil
 ```
 
-- `get_id()` 在 service 内返回当前 ID；standalone 无参数时返回 0 仅用于 root 兼容场景。
+- `get_id()` 在 service 内返回当前 ID；standalone 无参数时返回 0 仅用于 root 启动兼容场景。
+- `get_id(addr)` 和 `get_addr(id)` 是 service 上下文查询，不支持 standalone 业务代码调用。
 - `lookup` 找不到返回 nil，不再返回 0。
 - `get_addr` 不产生调试输出。
 - 查询函数校验 ID、slot 和状态；addr/lightuserdata 来源当前信任上游兼容层。完整 provenance 校验是未来开放非可信 native 边界时的可选增强。
@@ -498,8 +500,9 @@ service.recv_message(blocking) -> from, to, session, type, msg, sz | nil
 - 目标可为整数 ID 或注册名称。
 - 名称不存在、目标停止、邮箱满或序列化失败时返回 `nil, error`。
 - `_send_message` 成功后接管 payload；失败时绑定层销毁 message 和 payload。
-- `recv_message(false)` 必须真正非阻塞。
-- `recv_message(true)` 只供内部兼容；service 线程依靠 libuv 唤醒，不在 Lua callback 内阻塞 pthread。
+- `recv_message(false)` 必须原样传给 native，并执行一次非阻塞 pop。
+- 参数缺省时保留兼容值 true；`recv_message(true)` 也不阻塞，只保留调用形式。
+- service dispatcher 明确使用 false；service 线程依靠 libuv 唤醒，不在 Lua callback 内阻塞 pthread。
 
 ### 9.6 同步 RPC
 
@@ -553,8 +556,9 @@ return service.dispatch(S)
 - 错误 payload 至少包含稳定字符串：`code: message\ntraceback`。
 - session 0 的单向请求发生错误时只记录日志，不发送响应。
 - `resume_session` 必须检查 coroutine 状态；恢复失败时清理其所有 session 元数据，并向上游回复错误。
-- 每次 async callback 最多处理 `dispatch_batch_size` 条消息，默认 256。剩余消息通过再次触发 async 继续处理，避免饿死 timer 和 socket callback。
-- C 回调使用 `lua_pcall(..., 0, 0, ...)` 或在成功后恢复原栈顶，确保每次回调 Lua 栈深不变。
+- 每次 async callback 最多处理内部常量 `DISPATCH_BATCH_SIZE` 条消息，当前固定为 256。剩余消息通过再次触发 async 继续处理，避免饿死 timer 和 socket callback。
+- 每轮 Lua dispatch 在返回前调用一次已注册的 `service.on_idle`，即使该轮达到 batch 上限且 mailbox 仍有积压；它是同步轮末钩子，不表示 mailbox 为空。
+- C 回调读取一个内部 batch 标记，并在成功或异常后恢复原栈顶，确保每次回调 Lua 栈深不变。
 
 ### 9.8 Timer
 
@@ -748,11 +752,13 @@ lightuserdata 和 C function 的内容仍是裸地址，只允许同一进程、
 每次 inbox async callback：
 
 1. 保存 Lua 栈顶。
-2. 最多 pop 256 条消息。
-3. 对每条消息调用 Lua dispatch。
+2. Lua dispatcher 最多 pop 并处理 256 条消息。
+3. Lua 在该轮结束时调用一次 `service.on_idle`，然后返回是否达到 batch 上限。
 4. descriptor 位于 ring/consumer 栈，不产生逐消息外壳分配。
-5. consumer 必须最终 pop 到 empty 以清除 `scheduled`；批次耗尽时主动再次 `uv_async_send`。
-6. 恢复 Lua 栈顶并返回 libuv。
+5. C 读取内部 batch 标记并恢复 Lua 栈顶。
+6. 未达到上限时，empty pop 已清除 `scheduled`。
+7. 达到上限时，C 在 mailbox 锁内完成本轮：仍有消息则保持 `scheduled` 并再次 `uv_async_send`，已经为空则清除 `scheduled`。
+8. C 返回 libuv，使 timer 和 socket callback 获得运行机会。
 
 同一发送者向同一目标发送的消息必须保持 FIFO。不同发送者之间只保证 mailbox 获取锁后的全局入队顺序，不承诺确定性排序。
 

@@ -149,7 +149,7 @@ Lua/loop 的精确关闭顺序必须通过有 timer、socket 和 userdata finali
 - handler 内 quit 不再嵌套调用 `uv_run`；control async 在 callback 返回后执行关闭。
 - start 初始化握手、STARTING stop、source 初始化失败、重复 join 和 invalid ID 错误。
 
-当前已覆盖 active timer 和已初始化 TCP handle 的基本关闭；尚未完成的必做项是逐初始化步骤故障注入、pending request/活动 socket 和关闭异常路径。RPC/coroutine 取消在可信接收方模型下不是当前目标。pool 的独立 GC/shutdown API 按当前“join root 后进程退出”的运行约束暂缓；任意伪造 lightuserdata 的进程级验证按可信上游假设移到最终可选项。
+当前已覆盖 active timer 和已初始化 TCP handle 的基本关闭。当前主线假定底层启动步骤成功；逐初始化步骤故障注入、结构化底层错误、活动 socket 和关闭异常路径后置为可选运行时加固。RPC/coroutine 取消在可信接收方模型下不是当前目标。pool 的独立 GC/shutdown API 按当前“join root 后进程退出”的运行约束暂缓；任意伪造 lightuserdata 的进程级验证按可信上游假设移到最终可选项。
 
 ## Root 和进程退出
 
@@ -157,7 +157,9 @@ Lua/loop 的精确关闭顺序必须通过有 timer、socket 和 userdata finali
 
 这个约束暂时搁置 pool 的独立 shutdown 问题，但不能用进程退出掩盖 service 内部的错误关闭：root pthread 返回前，所有 luv/libuv callback 必须结束，所有 handle 必须完成 close，`uv_loop_close` 必须成功，Lua VM 才能销毁。若 handler 永不返回，join 会继续等待；第一版不使用 `pthread_cancel` 强制拆除 Lua/luv 运行时。
 
-## 必测故障点
+## 可选故障加固清单
+
+以下场景不属于当前主线发布阻塞项；未来需要覆盖底层运行时故障时再实施：
 
 - 每个 malloc、mutex/cond/mailbox 初始化失败。
 - pool full 和重复 name。

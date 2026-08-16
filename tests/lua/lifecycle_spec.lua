@@ -2,6 +2,12 @@ local service = require "lservice3"
 
 local source = [[
 local service = require "lservice3" .input(...)
+local native_recv_message = service._recv_message
+
+service._recv_message = function(self, blocking)
+    assert(blocking == false, "dispatcher receive must be nonblocking")
+    return native_recv_message(self, blocking)
+end
 
 return service.dispatch(function(command)
     assert(command == "boot")

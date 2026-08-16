@@ -15,6 +15,8 @@ static void service_control_cb(uv_async_t *handle);
 static void
 service_async_cb(uv_async_t *handle) {
     service_t *service = handle->data;
+    bool batch_full = false;
+    bool handler_failed = false;
     int top;
 
     if (service == NULL || service_get_state(service) != SERVICE_RUNNING)
@@ -26,10 +28,24 @@ service_async_cb(uv_async_t *handle) {
     top = lua_gettop(service->L);
     lua_rawgeti(service->L, LUA_REGISTRYINDEX, service->func_ref);
     lua_pushliteral(service->L, "msg");
-    if (lua_pcall(service->L, 1, 0, 0) != LUA_OK)
+    if (lua_pcall(service->L, 1, 1, 0) != LUA_OK) {
         log_error("service %u handler: %s", service->id,
             lua_tostring(service->L, -1));
+        handler_failed = true;
+    } else if (lua_isboolean(service->L, -1)) {
+        batch_full = lua_toboolean(service->L, -1);
+    }
     lua_settop(service->L, top);
+
+    if (handler_failed) {
+        service_stop(service);
+        return;
+    }
+    if (batch_full && mailbox_finish_batch(service->inbox) &&
+        uv_async_send(&service->inbox_async) != 0) {
+        log_error("could not continue dispatch for service %u", service->id);
+        service_stop(service);
+    }
 }
 
 service_pool_t *
@@ -728,6 +744,7 @@ service_send(service_pool_t *pool, const message_t *message) {
 
 bool
 service_recv(service_t *service, bool blocking, message_t *out) {
+    /* Retained for ABI compatibility; mailbox consumption is async-driven. */
     (void)blocking;
     if (service == NULL || out == NULL ||
         service_get_state(service) != SERVICE_RUNNING)

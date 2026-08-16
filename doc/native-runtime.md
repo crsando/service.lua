@@ -38,6 +38,8 @@ typedef uint32_t session_id_t;
 
 inbox async 负责业务消息，control async 负责 stop/fault 等生命周期事件。二者分离，避免业务 batch 和关闭请求互相递归。
 
+inbox callback 调用 Lua dispatcher 处理最多 256 条消息。Lua 在轮末执行一次 `service.on_idle` 并返回内部 batch 标记；达到上限时，C 通过 `mailbox_finish_batch` 在锁内判断积压，必要时再次发送 inbox async。空队列会同时清除 `scheduled`，使下一次 push 能重新唤醒。
+
 ## luv Loader
 
 luv 动态库进程级加载一次：
@@ -107,9 +109,9 @@ timestamp level service_id service_name thread_id component event message
 
 debug API 可以暴露快照，但 metrics 不参与控制流。bootstrap teardown 使用内部精确计数验证资源归零。
 
-## 分配和故障注入
+## 可选分配和故障注入
 
-所有 malloc/pthread/libuv/Lua 初始化调用检查返回值。测试构建允许注入“第 N 次操作失败”：
+生产代码仍检查 malloc/pthread/libuv/Lua 初始化调用的返回值，但当前主线假定这些底层启动步骤成功。未来需要覆盖运行时故障时，测试构建再允许注入“第 N 次操作失败”：
 
 - allocation。
 - mutex/condition init。

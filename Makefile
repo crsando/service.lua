@@ -42,6 +42,8 @@ test: test-contract test-mailbox test-service
 	timeout 10s $(LUA_ENV) luajit tests/lua/lifecycle_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/mailbox_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/rpc_spec.lua
+	timeout 10s $(LUA_ENV) luajit tests/lua/rpc_cross_service_spec.lua
+	timeout 10s $(LUA_ENV) luajit tests/lua/dispatch_batch_spec.lua
 
 $(CONTRACT_ABI_TEST): tests/contract/message_abi_test.c src/message.h
 	mkdir -p $(BUILD_DIR)

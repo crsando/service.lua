@@ -151,6 +151,11 @@ service.input(service_addr?, config_ptr?) -> service
 - 无 addr 时进入 standalone 上下文并清空旧 service 状态。
 - 返回同一个 `service` 模块 table。
 
+standalone 是宿主启动上下文，不是 service。程序可在该上下文调用
+`bootstrap/new/start/send/join`，但不调用 `get_id(addr)` 或 `get_addr(id)`；这两个地址转换
+接口依赖当前 service 上下文。standalone 下无参数 `get_id()` 返回 0 仅供 root 启动兼容
+逻辑使用，不作为通用查询能力。
+
 ### 创建和控制
 
 ```lua
@@ -203,16 +208,17 @@ service.quit() -> nil
 service.get_id(addr?) -> integer
 ```
 
-- 有 addr 时返回该 addr 的真实 ID。
+- 在 service 上下文中，有 addr 时返回该 addr 的真实 ID。
 - service 内无参数时返回当前 ID。
-- standalone 无参数返回 0 只用于 root 兼容场景。
+- standalone 不调用带 addr 的形式；无参数返回 0 只用于 root 启动兼容场景。
 
 ```lua
 service.get_addr(id_or_addr?) -> addr|nil, error?
 ```
 
 - addr 参数原样验证后返回。
-- integer 参数在当前 pool 查询稳定 handle；terminal handle 仍可供 join/诊断使用，但不能发送。
+- service 上下文中的 integer 参数在当前 pool 查询稳定 handle；terminal handle 仍可供 join/诊断使用，但不能发送。
+- standalone 不调用 integer 形式。
 - 不存在或越界时返回 `nil, error`，不打印调试输出。
 
 ```lua
@@ -254,8 +260,9 @@ service.recv_message(blocking) -> from, to, session, message_type, ptr, size
                                 | nil
 ```
 
-- `blocking=false` 必须真正非阻塞。
-- service loop 正常依赖 async 唤醒，不在 libuv callback 中阻塞 pthread。
+- `blocking=false` 原样传给 native，并执行一次非阻塞 pop。
+- 参数缺省时保留兼容值 true；`blocking=true` 也不阻塞，只保留调用形式。
+- service dispatcher 明确使用 false；等待由 async 唤醒完成，不在 libuv callback 中阻塞 pthread。
 - 返回的 ptr 由接收方拥有，必须正好调用一次 `unpack_remove` 或 `remove`。
 
 ### RPC
@@ -290,7 +297,8 @@ service.dispatch(handler_table) -> native_handler
 - table handler 找不到 command 时返回 `MESSAGE_ERROR`，错误字符串为 `command not found`。
 - handler coroutine 抛错时，`session > 0` 返回携带单个错误字符串的 `MESSAGE_ERROR`；`session == 0` 没有等待方，不发送 completion。
 - 低层消息发送方被视为可信，只发送符合下文 type/session 规则的消息。
-- 每次 inbox callback 默认最多处理 256 条消息，之后重新唤醒以保证 timer/socket 公平性。
+- 每次 inbox callback 固定最多处理 256 条消息，之后重新唤醒以保证 timer/socket 公平性。
+- 每轮 Lua dispatch 结束前调用一次 `service.on_idle`（若已设置且 service 尚未 quit）；达到 256 条且 mailbox 仍有积压时也调用。它是同步的轮末钩子，不是 coroutine，也不表示 mailbox 一定为空。
 
 ### Coroutine 和 timer
 
@@ -521,13 +529,9 @@ make test-regression       # 旧 serializer 当前预期失败
 - [x] 实现 active name 唯一性、ID `0..31` 和不复用策略。
 - [x] 实现单向状态机和 start 初始化握手。
 - [x] 实现 STARTING stop、初始化失败的基本回滚和 config 单 owner。
-- [ ] 为每个 allocation/pthread/libuv 初始化失败点增加故障注入。
-- [ ] 将结构化 start/loop-close 根因返回调用方，而不只写日志。
 - [x] 实现 control async 和非重入的有序 stop。
-- [ ] 用 timer/socket/luv userdata 覆盖 handle close 和 loop close 异常路径。
 - [x] 使用 `pthread_once` 加载 luv 并为每个 VM 绑定独立 loop。
 - [x] 实现 join/self-join/repeated join 契约。
-- [ ] bootstrap 后 service/message/buffer/handle 计数归零。
 
 ### 阶段 3：Lua 调度、RPC 和 timer
 
@@ -536,11 +540,12 @@ make test-regression       # 旧 serializer 当前预期失败
 - [x] 实现 uint32 session 安全回绕并跳过 pending ID。
 - [x] 显式分派 REQUEST/RESPONSE/ERROR，其他 type/session 组合释放 payload。
 - [x] 将 unknown command 和 handler coroutine error 通过 `MESSAGE_ERROR` 返回调用方。
-- [ ] 在可信 REQUEST/RESPONSE/ERROR 边界内补齐跨 service 和多返回值测试。
+- [x] 在可信 REQUEST/RESPONSE/ERROR 边界内补齐跨 service、多返回值和并发 pending 测试。
+- [x] 实现 dispatch batch、每轮 `on_idle` 和 timer/socket 公平性。
+- [ ] 修正剩余 Lua 公共 API 契约：无效 name 查询。
 - [ ] 若未来放宽 completion 必达假设，再实现 timeout、取消、来源校验和迟到/重复响应处理。
-- [ ] 实现 dispatch batch 和 timer/socket 公平性。
 - [ ] 停止时清理 sleep；RPC 停止取消只在未来放宽信任假设后实现。
-- [x] inbox C -> Lua callback 使用零返回值并恢复进入时 stack top。
+- [x] inbox C -> Lua callback 读取一个内部 batch 标记并恢复进入时 stack top。
 
 ### 阶段 4：可选安全增强
 
@@ -555,10 +560,15 @@ make test-regression       # 旧 serializer 当前预期失败
 - [ ] 增加帧限制、路由 allowlist、鉴权 hook 和速率限制。
 - [ ] 增加 `test-asan`、`test-tsan`、`lint` 和 CI。
 - [ ] 100 万消息测试无按消息增长的内存或 Lua 栈泄漏。
+- [ ] bootstrap 后 service/message/buffer/handle 计数归零。
+- [ ] 后置收紧 bootstrap 宿主入口：要求 fresh standalone，校验 entry/source/start，使用 `ROOT_ID` 投递；投递失败时 stop/join root，成功 join 后返回 true。pool/子 service 完整回收仍由上一项负责。
 - [ ] 完成安装、错误语义、关闭方式和发布说明。
 
-### 阶段 6：可选的非可信 native 边界
+### 阶段 6：可选运行时加固
 
+- [ ] 若未来需要覆盖底层启动故障，再为 allocation/pthread/libuv/Lua 初始化失败点增加故障注入。
+- [ ] 将结构化 start/loop-close 根因返回调用方，而不只写日志。
+- [ ] 用 timer/socket/luv userdata 覆盖 handle close 和 loop close 异常路径。
 - [ ] 若未来允许不可信 Lua/native 调用，再验证任意 lightuserdata、pool 归属、terminal addr 和 stale handle；当前可信上游场景不以此阻塞发布。
 
 ## 设计文档索引

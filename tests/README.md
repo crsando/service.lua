@@ -16,6 +16,12 @@ Run the baseline compatibility suite:
 make test
 ```
 
+The default suite includes a two-service RPC integration test covering
+multi-value responses (including nil values), immediate and delayed handler
+errors, nested calls, and 128 concurrently pending calls.
+It also covers the exact 256-message dispatch boundary, one `on_idle` call per
+dispatch round, mailbox continuation, and timer fairness under inbox backlog.
+
 Run the standalone MPSC mailbox and service lifecycle tests:
 
 ```sh

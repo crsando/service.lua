@@ -111,6 +111,52 @@ test_non_power_of_two_capacity(void) {
 }
 
 static void
+test_batch_schedule(void) {
+    mailbox_t *box = mailbox_new(256);
+    message_t message;
+    message_t out;
+    bool notify;
+
+    assert(box != NULL);
+    for (uint32_t i = 0; i < 256; i++) {
+        message = make_message(0, i);
+        assert(mailbox_try_push(box, &message, &notify) == MAILBOX_OK);
+        assert(notify == (i == 0));
+    }
+    for (uint32_t i = 0; i < 256; i++) {
+        assert(mailbox_try_pop(box, &out));
+        assert(out.session == i);
+    }
+    assert(!mailbox_finish_batch(box));
+
+    message = make_message(0, 256);
+    assert(mailbox_try_push(box, &message, &notify) == MAILBOX_OK && notify);
+    assert(mailbox_try_pop(box, &out) && out.session == 256);
+    assert(!mailbox_finish_batch(box));
+    mailbox_delete(box);
+
+    box = mailbox_new(257);
+    assert(box != NULL);
+    for (uint32_t i = 0; i < 257; i++) {
+        message = make_message(0, i);
+        assert(mailbox_try_push(box, &message, &notify) == MAILBOX_OK);
+        assert(notify == (i == 0));
+    }
+    for (uint32_t i = 0; i < 256; i++) {
+        assert(mailbox_try_pop(box, &out));
+        assert(out.session == i);
+    }
+    assert(mailbox_finish_batch(box));
+
+    assert(mailbox_try_pop(box, &out) && out.session == 256);
+    message = make_message(0, 257);
+    assert(mailbox_try_push(box, &message, &notify) == MAILBOX_OK && !notify);
+    assert(mailbox_try_pop(box, &out) && out.session == 257);
+    assert(!mailbox_finish_batch(box));
+    mailbox_delete(box);
+}
+
+static void
 test_producers(size_t producer_count) {
     const size_t total = producer_count * MESSAGES_PER_PRODUCER;
     mailbox_t *box = mailbox_new(64);
@@ -118,6 +164,7 @@ test_producers(size_t producer_count) {
     producer_args_t *args = calloc(producer_count, sizeof(*args));
     unsigned char *seen = calloc(total, 1);
     uint32_t *next = calloc(producer_count, sizeof(*next));
+    size_t batch_count = 0;
 
     assert(box != NULL && threads != NULL && args != NULL && seen != NULL && next != NULL);
     for (size_t i = 0; i < producer_count; i++) {
@@ -137,8 +184,16 @@ test_producers(size_t producer_count) {
         assert(message.session == next[message.from]++);
         seen[index] = 1;
         received++;
+        batch_count++;
+        if (batch_count == 256) {
+            mailbox_finish_batch(box);
+            batch_count = 0;
+        }
         message_dispose(&message);
     }
+
+    if (batch_count > 0)
+        assert(!mailbox_finish_batch(box));
 
     for (size_t i = 0; i < producer_count; i++)
         assert(pthread_join(threads[i], NULL) == 0);
@@ -157,6 +212,7 @@ main(void) {
     assert(mailbox_new(0) == NULL);
     test_schedule_and_close();
     test_non_power_of_two_capacity();
+    test_batch_schedule();
     test_producers(1);
     test_producers(2);
     test_producers(4);

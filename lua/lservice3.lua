@@ -16,6 +16,7 @@ local uv = require "luv"
 
 local ROOT_ID = 0
 local UINT32_MAX = 4294967295
+local DISPATCH_BATCH_SIZE = 256
 
 local MESSAGE_SYSTEM = 0
 local MESSAGE_REQUEST = 1
@@ -179,7 +180,9 @@ end
 
 function service.recv_message(blocking)
     assert(service.self, "no self state provided")
-    blocking = blocking or true
+    if blocking == nil then
+        blocking = true
+    end
     return service._recv_message(service.self, blocking)
 end
 
@@ -415,15 +418,18 @@ function service.dispatch(request_handler)
 
     service._on_msg = function (msg)
         -- if in standalone mode
-        if not service.self then return nil end
+        if not service.self then return false end
+
+        local processed = 0
 
         -- main loop
-        while msg and not quit do
-            local from, to, session, type, msg, sz = service.recv_message(true) -- blocking
+        while msg and not quit and processed < DISPATCH_BATCH_SIZE do
+            local from, to, session, type, msg, sz = service.recv_message(false)
             -- print("recv_message", from, to, session, type, msg, sz)
             if from == nil then
                 break
             end
+            processed = processed + 1
             -- if a request is received
             if type == MESSAGE_REQUEST then
                 local co = new_session(function (type, msg, sz)
@@ -444,15 +450,12 @@ function service.dispatch(request_handler)
             end
         end
 
-        -- on idle
-        do
-            -- if on_idle is registered, run here
-            if (not quit) and (service.on_idle) then
-                service.on_idle() -- attention, this is not a coroutine
-            end
+        -- Synchronous end-of-round hook; the mailbox may still have messages.
+        if (not quit) and service.on_idle then
+            service.on_idle()
+        end
 
-            -- dispatch_wakeup()
-        end -- end while
+        return (not quit) and processed == DISPATCH_BATCH_SIZE
     end -- end function (handler)
 
     return service._on_msg

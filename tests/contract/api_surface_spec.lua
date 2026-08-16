@@ -74,4 +74,23 @@ assert(service.input() == service, "input must return the same module table")
 assert(service.self == nil, "standalone input must clear service.self")
 assert(type(service.config) == "table", "standalone config must be an empty table")
 
+local fake_self, fake_self_size = service.pack("recv-message-contract")
+local native_recv_message = service._recv_message
+local observed_blocking
+
+service.self = fake_self
+service._recv_message = function(actual_self, blocking)
+    assert(actual_self == fake_self, "recv_message must forward service.self")
+    observed_blocking = blocking
+end
+
+service.recv_message(false)
+assert(observed_blocking == false, "recv_message(false) must preserve false")
+service.recv_message()
+assert(observed_blocking == true, "recv_message() must preserve the compatibility default")
+
+service._recv_message = native_recv_message
+service.self = nil
+service.remove(fake_self, fake_self_size)
+
 print("api_surface_spec: ok")

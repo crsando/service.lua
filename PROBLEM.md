@@ -48,7 +48,7 @@
 | ROUTE-001 | P1 | FIXED | 未知名称返回 nil，不再映射到 root |
 | ROUTE-002 | P1 | FIXED | ID 在 native 边界校验并返回 `SERVICE_NOT_FOUND` |
 | MEM-001 | P1 | FIXED | `message_t` 改为按值传递，不再分配逐消息外壳 |
-| MEM-002 | P1 | FIXED | async callback 使用零返回值并恢复原 stack top |
+| MEM-002 | P1 | FIXED | async callback 读取内部 batch 标记并恢复原 stack top |
 | LIFE-001 | P1 | PARTIAL | 已 retire/pin/drain/free；pool GC 和资源计数待补 |
 | LIFE-002 | P1 | FIXED | quit 只请求停止，由 control async 有序关闭 |
 | SER-001 | P1 | KNOWN-FAIL | 普通共享 table 引用无法解码 |
@@ -59,7 +59,7 @@
 | API-001 | P2 | OPEN | 多个 Lua 公共 API 参数转发或默认值错误 |
 | RPC-003 | P2 | FIXED | session 在 uint32 范围安全回绕并跳过 pending ID |
 | PROTO-001 | P2 | FIXED | REQUEST/RESPONSE/ERROR 使用显式 type/session 分派 |
-| LIFE-003 | P2 | PARTIAL | 基本初始化失败已回滚，完整故障注入矩阵待补 |
+| LIFE-003 | P2 | ACCEPTED | 假定底层启动步骤成功；完整故障注入后置为可选加固 |
 | NET-001 | P2 | OPEN | TCP 输入 buffer 无上限，默认绑定所有网卡 |
 | REG-001 | P2 | OPEN | registry key 使用无边界 `strcpy` |
 | LUV-001 | P2 | OPEN | 每个 service 重复 `dlopen` luv 且句柄未统一管理 |
@@ -188,7 +188,7 @@ C 回调使用 `lua_pcall(L, 1, 1, 0)` 请求一个返回值。Lua dispatch hand
 
 影响：高频或长时间运行时 Lua 栈和关联内存持续增长，最终可能触发内存错误。
 
-callback 现在保存进入时的 stack top，使用 0 个 Lua 返回值，并在成功或异常后统一 `lua_settop` 恢复。后续百万消息压力测试仍会继续观察 Lua 内存，但不再存在逐 callback 留下 nil 的路径。
+callback 现在保存进入时的 stack top，读取一个内部 batch 标记，并在成功或异常后统一 `lua_settop` 恢复。后续百万消息压力测试仍会继续观察 Lua 内存，但不再存在逐 callback 留下返回值的路径。
 
 ## 6. RPC 和错误传播问题
 
@@ -293,10 +293,10 @@ handler 调用 `service.quit` 时立即进入 `_stop`。C stop 在当前 libuv c
 
 `quit` 现在只设置幂等 stop request 并通知 control async。消息 callback 返回后，目标 service 线程等待 send pin、drain mailbox、关闭 handle 并让主 `uv_run` 自然退出，不再嵌套运行 loop。
 
-### LIFE-003：初始化失败缺少完整回滚
+### LIFE-003：底层初始化失败的完整故障加固
 
 - 严重程度：`P2`
-- 状态：`PARTIAL`
+- 状态：`ACCEPTED`
 - 证据：[src/service.c:315](src/service.c#L315)、[src/service.c:377](src/service.c#L377)
 
 问题包括：
@@ -307,7 +307,7 @@ handler 调用 `service.quit` 时立即进入 `_stop`。C stop 在当前 libuv c
 - service 已注册到 pool 后发生初始化失败，没有注销。
 - config 在 source 未执行时可能无人释放。
 
-当前创建流程最后注册，start 等待 `start_done`，Lua/source 初始化失败会 retire、drain、关闭 loop、join 并释放 config/source/mailbox。尚未为每一个 malloc/pthread/libuv 失败点建立可控故障注入，详细根因也只进入日志而未随错误对象返回，所以保留 PARTIAL。
+当前创建流程最后注册，start 等待 `start_done`，Lua/source 初始化失败会 retire、drain、关闭 loop、join 并释放 config/source/mailbox。当前主线假定 allocation、pthread、libuv 和 Lua VM 等底层启动步骤成功，不为每一个失败点建立可控故障注入；结构化启动根因和完整回滚矩阵后置为可选运行时加固。
 
 ### LUV-001：luv 动态库句柄按 service 重复加载
 
@@ -360,18 +360,13 @@ make test-regression
 - 严重程度：`P2`
 - 状态：`OPEN`
 
-已确认项目：
+当前仍可复现的项目：
 
-1. [lua/lservice3.lua:64](lua/lservice3.lua#L64)：`config` 没有 `local`，污染 service VM 的全局环境。
-2. [lua/lservice3.lua:95](lua/lservice3.lua#L95)：`get_uv_loop(addr)` 忽略 addr，始终使用 `service.self`；standalone 调用可把 NULL 传入 C。
-3. [lua/lservice3.lua:101](lua/lservice3.lua#L101)：standalone 下 `get_id(addr)` 无条件返回 0，无法查询第二个 service 的真实 ID。
-4. [lua/lservice3.lua:129](lua/lservice3.lua#L129)：`get_addr` 把 lightuserdata 写入 stderr，Lua IO 可能因参数类型报错；查询 API 还产生无条件调试输出。
-5. [lua/lservice3.lua:154](lua/lservice3.lua#L154)：`send_message` 调用 `_send_message` 时漏传 pool，所有参数整体错位。
-6. [lua/lservice3.lua:161](lua/lservice3.lua#L161)：`blocking = blocking or true` 使显式 false 也变成 true。
-7. [src/service.c:390](src/service.c#L390)：底层所谓 blocking 也没有等待，只是最多 pop 两次。
-8. [lua/lservice3.lua:424](lua/lservice3.lua#L424)：`type(entry.source == "string")` 检查的是 boolean 的类型，不能验证 source 类型。
-9. [lua/lservice3.lua:138](lua/lservice3.lua#L138)：没有 config 时 `service.config` 可能是 nil，而不是稳定的空 table。
-10. `_send_message` 成功不返回状态，`service.send` 因而无法报告成功、full 或 stopped。
+1. [lua/lservice3.lua:132](lua/lservice3.lua#L132)：`lookup(nil)` 返回 root ID 0，而不是拒绝无效 name 或返回 miss。
+
+`recv_message(false)` 现在原样传入 native，dispatcher 明确使用非阻塞模式；true 仅保留兼容调用形式，native 接收始终是 try-pop。standalone 被定义为宿主启动上下文，业务程序不调用 `get_id(addr)` 或 `get_addr(id)`；当前行为按该前置条件接受，不再属于 API-001。旧基线中的全局 `config`、`get_uv_loop(addr)`、查询调试输出、`send_message` 参数错位、空 config 和 send 状态返回问题已经修复，不再属于本项剩余范围。
+
+bootstrap 参数校验和返回契约后置到发布阶段：届时要求 fresh standalone，校验 entry/source/start，使用 `ROOT_ID` 投递；投递失败时 stop/join root，成功 join 后返回 true。pool/子 service 完整回收仍属于后置资源任务。
 
 解决方向：保持函数名和参数形式兼容，但修正 bug 行为；为查询、发送和启动定义明确返回契约，并建立 API contract 测试。
 
@@ -457,30 +452,33 @@ registry 分配固定 32 字节 key，随后使用无边界 `strcpy`。当前 re
 - [tests/lua/serializer_spec.lua](tests/lua/serializer_spec.lua)：普通值、二进制字符串、嵌套 table、循环引用。
 - [tests/lua/lifecycle_spec.lua](tests/lua/lifecycle_spec.lua)：最小 service 启动、dispatch 和退出。
 - [tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)：managed coroutine 校验、uint32 session 回绕和同 service RPC。
+- [tests/lua/rpc_cross_service_spec.lua](tests/lua/rpc_cross_service_spec.lua)：跨 service、多返回值、错误传播、嵌套调用和并发 pending RPC。
+- [tests/lua/dispatch_batch_spec.lua](tests/lua/dispatch_batch_spec.lua)：256 条精确边界、每轮 `on_idle` 和 timer 公平性。
 - [tests/lua/mailbox_spec.lua](tests/lua/mailbox_spec.lua)：mailbox full 的 Lua 错误链路。
-- [tests/c/mailbox_test.c](tests/c/mailbox_test.c)：1/2/4/16 producer、FIFO、full 和 close。
+- [tests/c/mailbox_test.c](tests/c/mailbox_test.c)：1/2/4/16 producer、FIFO、full、close 和 batch 续调度。
 - [tests/c/service_lifecycle_test.c](tests/c/service_lifecycle_test.c)：pin/free 同步、8 producer stop 竞争、name/ID 上限。
 - [tests/regression/serializer_shared_ref_spec.lua](tests/regression/serializer_shared_ref_spec.lua)：共享引用已知失败。
 
 仍缺少：
 
-- 跨 service RPC、多返回值和可信 response 压力测试。
-- pool/bootstrap 资源归零和复杂 luv handle 关闭测试。
+- pool/bootstrap 资源归零测试。
 - ASan/UBSan/LSan/Valgrind。
 - gateway 协议和恶意输入测试。
 - serializer malformed input 和 fuzz。
+
+复杂 luv handle 异常关闭与逐启动步骤故障注入已后置为可选运行时加固。
 
 ## 15. 修复优先级
 
 建议按以下顺序推进，避免在不稳定基础上扩展功能：
 
 1. 完成 SEC-001 的外部凭据轮换确认。
-2. 补齐 lifecycle 故障注入、复杂 luv handle 关闭和 pool/bootstrap 销毁。
-3. 在可信 REQUEST/RESPONSE/ERROR 边界内补齐跨 service、多返回值和压力测试。
-4. 用 LSan、长消息测试或资源计数确认消息、Lua 栈和 payload 长期不增长。
-5. 修正其余公共 API contract。
-6. 按需要评估 serializer 安全增强和网络 gateway。
-7. 清理死代码、统一编码风格、补齐性能和工程工具。
+2. 修正其余公共 API contract，当前剩余无效 name 查询。
+3. 停止时清理未完成的 sleep timer。
+4. 按需要评估 serializer 安全增强和网络 gateway。
+5. 清理死代码、统一编码风格、补齐性能和工程工具。
+6. 后续收紧 bootstrap，并用 LSan、长消息测试或资源计数确认消息、Lua 栈和 payload 长期不增长及 pool/bootstrap 资源归零。
+7. 可选补充 allocation/pthread/libuv/Lua 启动故障注入、结构化底层错误和复杂 luv handle 异常关闭测试。
 8. 只有未来扩大 native 信任边界时，才实现任意 lightuserdata、pool 归属和 stale addr provenance 验证；当前不阻塞发布。
 
 ## 16. 问题关闭标准

@@ -523,4 +523,4 @@ mailbox_delete   -> drain 后 message_dispose
 
 Skynet 的 mailbox 本身并不神秘：一把短临界区自旋锁、一个动态 ring、一个防重复调度的 `in_global` 标志。它最成熟的部分是 mailbox 外围的生命周期协议。handle grab 保证 lookup 后对象仍活着，retire 阻止新 send，context ref 等待旧 send，mailbox release 再收尾残留 payload。这一结构直接回答了“push 已经原子，为什么仍会竞争”：竞争对象不仅是 queue slot，还包括目标 service、mailbox 和唤醒 handle 是否仍然存活。
 
-当前项目已经补齐 `registry lookup/pin -> mailbox push -> uv_async_send -> unpin` 与 `unregister -> close -> wait pins -> drain -> free` 两条互斥闭环。下一步是逐初始化步骤故障注入、复杂 luv handle 关闭和 pool teardown；现阶段继续信任上游生成的 native handle 与 `lua-seri` 裸 payload，不增加 Buffer Registry。任意 lightuserdata provenance 验证只在未来扩大信任边界时作为最终可选项。
+当前项目已经补齐 `registry lookup/pin -> mailbox push -> uv_async_send -> unpin` 与 `unregister -> close -> wait pins -> drain -> free` 两条互斥闭环，并在可信 REQUEST/RESPONSE/ERROR 边界内验证了跨 service RPC、多返回值、嵌套调用和并发 pending 路径。有界 dispatch 现在每轮最多处理 256 条消息并执行一次 `on_idle`，积压通过 consumer 续唤醒交还 libuv 调度机会；当前主线下一步是修正剩余 Lua 公共 API 契约。消息、Lua 栈、payload 与 pool/bootstrap 的资源增长和归零验证移到后续发布稳定性阶段，逐初始化步骤故障注入和复杂 luv handle 异常关闭后置为可选运行时加固。现阶段继续信任上游生成的 native handle 与 `lua-seri` 裸 payload，不增加 Buffer Registry。任意 lightuserdata provenance 验证只在未来扩大信任边界时作为最终可选项。
