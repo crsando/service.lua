@@ -62,7 +62,6 @@
 | PROTO-001 | P2 | FIXED | REQUEST/RESPONSE/ERROR 使用显式 type/session 分派 |
 | LIFE-003 | P2 | ACCEPTED | 假定底层启动步骤成功；完整故障注入后置为可选加固 |
 | NET-001 | P2 | OPEN | TCP 输入 buffer 无上限，默认绑定所有网卡 |
-| REG-001 | P2 | OPEN | registry key 使用无边界 `strcpy` |
 | LUV-001 | P2 | OPEN | 每个 service 重复 `dlopen` luv 且句柄未统一管理 |
 | TEST-001 | P3 | LEGACY | 原测试引用不存在的 `lservice2` 并无限运行 |
 | DOC-001 | P3 | OPEN | 复制代码仍含未使用依赖、死字段和注释实现 |
@@ -424,16 +423,6 @@ gateway 和 remote 把每次 chunk 连接到 Lua string，直到遇到换行；�
 解决方向：设置最大帧、最大连接数、读超时；超限关闭连接；默认只监听 localhost，外部绑定必须显式配置。
 
 ## 13. 其他 C 实现问题
-
-### REG-001：registry key 可能溢出
-
-- 严重程度：`P2`
-- 状态：`OPEN`
-- 证据：[src/registry.c:23](src/registry.c#L23)
-
-registry 分配固定 32 字节 key，随后使用无边界 `strcpy`。当前 registry 路径没有暴露为主要 Lua API，但一旦调用方传入超过 31 字节的 key 就会覆盖相邻内存。
-
-解决方向：在 API 边界验证长度并使用有界复制；最好把 key 长度作为契约，不依赖隐含数组大小。
 
 ### DOC-001：核心代码仍含不必要依赖和未完成结构
 

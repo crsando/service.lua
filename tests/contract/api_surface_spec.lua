@@ -54,6 +54,7 @@ assert_functions(native, {
     "_get_id",
     "_send_message",
     "_recv_message",
+    "_log_error",
     "pack",
     "unpack",
     "unpack_remove",

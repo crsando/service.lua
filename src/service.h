@@ -9,7 +9,6 @@
 
 #include "mailbox.h"
 #include "message.h"
-#include "registry.h"
 
 #define MAX_SERVICES 32
 #define MAX_SERVICE_NAME_LEN 32
@@ -43,7 +42,6 @@ struct service_pool {
     pthread_cond_t pins_changed;
     service_t *services[MAX_SERVICES];
     service_id_t next_id;
-    registry_t *variables;
 };
 
 /* service_t is a stable handle; its runtime fields are released after join. */
@@ -82,7 +80,6 @@ struct service {
 
 service_pool_t *service_pool_new(void);
 void service_pool_delete(service_pool_t *pool);
-void *service_pool_registry(service_pool_t *pool, const char *key, void *ptr);
 service_t *service_pool_get_service(service_pool_t *pool, service_id_t id);
 service_t *service_pool_lookup_service(service_pool_t *pool, const char *name);
 

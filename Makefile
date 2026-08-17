@@ -19,14 +19,13 @@ MAILBOX_TSAN_TEST=$(BUILD_DIR)/mailbox_test_tsan
 SERVICE_TEST=$(BUILD_DIR)/service_lifecycle_test
 SERVICE_TSAN_TEST=$(BUILD_DIR)/service_lifecycle_test_tsan
 SERVICE_TEST_SRCS=tests/c/service_lifecycle_test.c src/service.c src/loadluv.c src/mailbox.c \
- src/message.c src/registry.c src/log.c
+ src/message.c src/log.c
 
 SRCS=\
  src/lservice.c \
  src/service.c \
  src/loadluv.c \
  src/mailbox.c \
- src/registry.c \
  src/message.c \
  src/lua-seri.c \
  src/log.c

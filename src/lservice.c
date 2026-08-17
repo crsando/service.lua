@@ -236,6 +236,15 @@ static int lservice_recv_message(lua_State *L) {
     }
 }
 
+static int lservice_log_error(lua_State *L) {
+    luaL_checktype(L, 1, LUA_TLIGHTUSERDATA);
+    service_t *s = lua_touserdata(L, 1);
+    const char *message = luaL_checkstring(L, 2);
+
+    log_error("service %u handler: %s", s->id, message);
+    return 0;
+}
+
 static int
 luaseri_remove(lua_State *L) {
 	if (lua_isnoneornil(L, 1))
@@ -271,6 +280,7 @@ LUAMOD_API int luaopen_lservice3_c(lua_State *L) {
 		{ "_get_id", lservice_get_id },
 		{ "_send_message", lservice_send_message },
 		{ "_recv_message", lservice_recv_message },
+		{ "_log_error", lservice_log_error },
 
         // serialization components
 		{ "remove", luaseri_remove },

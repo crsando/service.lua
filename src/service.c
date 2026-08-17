@@ -97,24 +97,6 @@ service_pool_lookup_service(service_pool_t *pool, const char *name) {
     return service;
 }
 
-void *
-service_pool_registry(service_pool_t *pool, const char *key, void *ptr) {
-    void *data = NULL;
-
-    if (pool == NULL || key == NULL)
-        return NULL;
-    pthread_mutex_lock(&pool->lock);
-    if (ptr != NULL) {
-        registry_t *entry = registry_put(&pool->variables, key, ptr);
-        data = entry == NULL ? NULL : entry->ptr;
-    } else if (pool->variables != NULL) {
-        registry_t *entry = registry_get(&pool->variables, key);
-        data = entry == NULL ? NULL : entry->ptr;
-    }
-    pthread_mutex_unlock(&pool->lock);
-    return data;
-}
-
 service_state_t
 service_get_state(service_t *service) {
     service_state_t state;
@@ -851,7 +833,6 @@ service_pool_delete(service_pool_t *pool) {
         pthread_mutex_destroy(&service->state_lock);
         free(service);
     }
-    registry_clear(&pool->variables);
     pthread_cond_destroy(&pool->pins_changed);
     pthread_mutex_destroy(&pool->lock);
     free(pool);

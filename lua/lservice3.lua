@@ -1,5 +1,4 @@
 local service = require "lservice3_c"
-local inspect = require "inspect"
 
 -- 除了入口之外，这里理论上已经注册过"luv"
 -- 理论上，一个service 启动的时候，会自动加载一份 luv，故这里轮上会直接获取 package.loaded["luv"] 的结果
@@ -14,21 +13,12 @@ local uv = require "luv"
 
 -- constants
 
-local ROOT_ID = 0
 local UINT32_MAX = 4294967295
 local DISPATCH_BATCH_SIZE = 256
 
-local MESSAGE_SYSTEM = 0
 local MESSAGE_REQUEST = 1
 local MESSAGE_RESPONSE = 2
 local MESSAGE_ERROR = 3
-local MESSAGE_SIGNAL = 4
-
-local MESSAGE_RECEIPT_NONE = 0
-local MESSAGE_RECEIPT_DONE = 1
-local MESSAGE_RECEIPT_ERROR = 2
-local MESSAGE_RECEIPT_BLOCK = 3
-local MESSAGE_RECEIPT_RESPONCE = 4
 
 local CALL_SEND_ERROR = {
     SERVICE_NOT_FOUND = "service not found",
@@ -62,20 +52,11 @@ function service.new(t)
         if t.pool then
             service.pool = t.pool
         else
-            -- print("create new pool")
             service.pool = service._pool_new()
         end
     end
 
     assert(t.source, "source not provided")
-    --[[
-    local code = nil
-    if string.sub(t.source, 1, 1) == "@" then
-        code = assert(io.open(string.sub(t.source, 2, -1)):read("*all"), "service code path not found")
-    else
-        code = t.source
-    end
-    ]]
 
     local config = nil
     if t.config and (type(t.config) == "table") then
@@ -85,7 +66,6 @@ function service.new(t)
     end
 
     local addr = service._new(t.pool or service.pool, t.name, t.source, config, t)
-    -- setmetatable(s, { __index = service })
     return addr
 end
 
@@ -157,14 +137,12 @@ end
 
 
 function service.input(s, config_ptr)
-    -- print("service.input", s, config, uv)
     if s then
         service.self = s
         service.pool = service.get_pool(s)
         -- The native start path owns and frees config_ptr after source init.
         service.config = config_ptr and service.unpack(config_ptr) or {}
     else
-        -- print("No input, running in standalone mode")
         service.self = nil
         service.pool = nil
         service.config = {}
@@ -192,15 +170,10 @@ end
 local running_thread
 
 local session_coroutine_suspend_lookup = {}
-local session_coroutine_where = {}
-local session_coroutine_suspend = {}
 local session_coroutine_response = {}
 local session_coroutine_address = {}
 local next_session_id = 1
 local managed_coroutines = setmetatable({}, { __mode = "k" })
-
-local session_waiting = {}
-local wakeup_queue = {}
 
 local function allocate_session()
     local first = next_session_id
@@ -251,34 +224,26 @@ local function resume_session(co, ...)
 
     session_coroutine_address[co] = nil
     session_coroutine_response[co] = nil
-    if from ~= nil and type(session) == "number" and session > 0 then
-        send_error_response(from, session, error_message(errobj))
+    if from ~= nil and type(session) == "number" then
+        local message = error_message(errobj)
+        service._log_error(service.self, message)
+        if session > 0 then
+            send_error_response(from, session, message)
+        end
     end
 end
 
 service.resume_session = resume_session
 
-local coroutine_pool = setmetatable({}, { __mode = "kv" })
-
--- Mingda Qiu
--- 原始的new_thread没看懂, 尝试换一个写法试试
 local function new_thread(f)
-    local co = coroutine.create(function (...)
-            -- print(">>> coroutine begin", f, inspect{...})
-            local ok, err = pcall(f, ...)
-            if not ok then print("ERROR", err) end
-            if not ok then error(err, 0) end
-            -- print(">>> coroutine end")
-        end)
+    local co = coroutine.create(f)
 
     managed_coroutines[co] = true
-    table.insert(coroutine_pool, co)
 
 	return co
 end
 
 local function new_session(f, from, session)
-    -- print("new_session", f, from, session)
 	local co = new_thread(f)
 	session_coroutine_address[co] = from
 	session_coroutine_response[co] = session
@@ -287,7 +252,6 @@ end
 
 local function send_response(...)
 	local session = session_coroutine_response[running_thread]
-    -- print("send_response", session, inspect{...})
 
 	if session > 0 then
 		local from = session_coroutine_address[running_thread]
@@ -300,20 +264,6 @@ local function send_response(...)
 end
 
 -- api
-
--- local function dispatch_wakeup()
---     print("dispatch_wakeup", inspect(wakeup_queue))
--- 	while #wakeup_queue > 0 do
--- 		local s = table.remove(wakeup_queue, 1)
--- 		resume_session(unpack(s))
--- 	end
--- end
-
--- function service.fork(func, ...)
--- 	local co = new_thread(func)
--- 	wakeup_queue[#wakeup_queue+1] = {co, ...}
--- end
-
 
 function service.send(id, ...)
     if type(id) == "string" then
@@ -352,7 +302,6 @@ function service.call(id, ...)
 
     local session_id = allocate_session()
 
-    -- print("begin service.call:", id, session_id)
     local ok, err = service._send_message(
         service.pool,
         service.get_id(), -- from
@@ -367,9 +316,7 @@ function service.call(id, ...)
 
     session_coroutine_suspend_lookup[session_id] = caller
 
-    -- print("begin service.call yield_session:", id)
 	local type, session, msg, sz = yield_session()
-    -- print("service.call get response from")
 	if type == MESSAGE_RESPONSE then
 		return service.unpack_remove(msg, sz)
 	elseif type == MESSAGE_ERROR then
@@ -395,9 +342,6 @@ end
 --
 -- internal procedures
 --
-
-service._on_msg = nil
-service._on_idle = nil
 
 function service.dispatch(request_handler)
     local request; do
@@ -425,7 +369,6 @@ function service.dispatch(request_handler)
         -- main loop
         while msg and not quit and processed < DISPATCH_BATCH_SIZE do
             local from, to, session, type, msg, sz = service.recv_message(false)
-            -- print("recv_message", from, to, session, type, msg, sz)
             if from == nil then
                 break
             end
@@ -463,7 +406,7 @@ end -- end service.dispatch
 
 function service.bootstrap(entry)
     assert(entry and type(entry) == "table")
-    assert(entry.source and type(entry.source == "string"))
+    assert(type(entry.source) == "string", "entry.source must be a string")
 
     local entry_point = entry.start or "boot"
 
