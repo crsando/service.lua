@@ -133,6 +133,7 @@ local service = require "lservice3"
 | --- | --- | --- |
 | `service.self` | `lightuserdata\|nil` | 当前 service addr；standalone 为 nil |
 | `service.pool` | `lightuserdata\|nil` | 当前 pool；由 `input/new/bootstrap` 管理 |
+| `service.scheduler` | `table\|nil` | 可选的 `lservice3.scheduler` singleton；手动加载后赋值 |
 | `service.uv` | `table` | 已绑定当前 service 专属 loop 的 luv 模块 |
 | `service.config` | `table` | 当前 service 配置；无配置时必须是空 table |
 | `service.yield_session` | `function` | `coroutine.yield` 的兼容别名 |
@@ -325,6 +326,28 @@ service.set_timeout(milliseconds, callback) -> luv_timer
 ```
 
 创建一次性 timer。callback 前停止 timer，callback 后关闭 handle；callback 抛错也不能泄漏 handle。
+
+### 可选 Scheduler
+
+调度器不会随 `lservice3` 自动加载。需要时显式加载当前 VM 对应的 scheduler：
+
+```lua
+local service = require "lservice3"
+service.scheduler = require "lservice3.scheduler"
+
+service.scheduler:at(os.time() + 10, function()
+    -- 约十秒后执行；若 loop 当时繁忙，恢复后补执行一次
+end)
+
+service.scheduler:daily({ hour = 8, minute = 5, second = 1 }, function()
+    -- 每天按本地日历时间执行
+end)
+```
+
+`at` 的数字参数是 Unix epoch 秒，也接受带 `Z` 或时区偏移的 ISO/RFC3339 日期时间字符串；
+`daily` 接受 `{ hour, minute, second }` 或 `HH:MM:SS`。第一阶段 action 只支持函数，调度器
+每个 VM/loop 只创建并复用一个内部 timer。错过 deadline 的任务会在下一次 loop 检查时补执行，
+但 service 停止或进程退出后不再恢复任务。
 
 ### Bootstrap
 

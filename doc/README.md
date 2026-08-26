@@ -9,6 +9,7 @@
 - [Serializer 与 Buffer Registry](serialization.md)：可选的后续安全增强。
 - [原生运行时与 libuv](native-runtime.md)：binding、loop/luv、日志、metrics 和构建约束。
 - [测试和验收策略](testing.md)：contract、unit、integration、stress 和 sanitizer。
+- [Scheduler 设计](../DESIGN.SCHEDULER.md)：可选的单 timer、最小堆、时间解析和 overdue 补执行。
 - [Skynet 消息系统研究](skynet-analysis.md)：mailbox、消息所有权、context 退出和 `lua-seri` 的上游实现分析。
 - [ltask 调度与消息模型研究](ltask-analysis.md)：N:M scheduler、message/receipt、session/coroutine 及当前项目取舍。
 

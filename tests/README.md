@@ -33,6 +33,16 @@ make test-service
 make test-tsan
 ```
 
+Run the scheduler unit/integration test independently:
+
+```sh
+make test-scheduler
+```
+
+It covers optional-module loading, timestamp parsing, minimum-heap ordering, one-timer
+reuse, daily overdue compensation, callback error isolation, and an overdue task observed
+with a real libuv timer.
+
 The lifecycle test checks that join/free waits for an existing send pin,
 stresses eight producers against retire/close/join, covers stop during startup,
 closes an active luv timer and an initialized TCP handle, and verifies the

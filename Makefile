@@ -30,7 +30,7 @@ SRCS=\
  src/lua-seri.c \
  src/log.c
 
-.PHONY: all test test-contract test-mailbox test-service test-tsan test-regression install clean
+.PHONY: all test test-contract test-mailbox test-service test-scheduler test-tsan test-regression install clean
 
 all: lservice3_c.so
 
@@ -45,6 +45,7 @@ test: test-contract test-mailbox test-service
 	timeout 10s $(LUA_ENV) luajit tests/lua/rpc_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/rpc_cross_service_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/dispatch_batch_spec.lua
+	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_spec.lua
 
 $(CONTRACT_ABI_TEST): tests/contract/message_abi_test.c src/message.h
 	mkdir -p $(BUILD_DIR)
@@ -75,6 +76,9 @@ $(SERVICE_TEST): $(SERVICE_TEST_SRCS) src/service.h src/loadluv.h
 test-service: $(SERVICE_TEST)
 	$(SERVICE_TEST)
 
+test-scheduler: lservice3_c.so
+	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_spec.lua
+
 $(MAILBOX_TSAN_TEST): tests/c/mailbox_test.c src/mailbox.c src/mailbox.h src/message.c src/message.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(TSAN_CFLAGS) -Isrc -o $@ tests/c/mailbox_test.c src/mailbox.c src/message.c -lpthread
@@ -95,6 +99,8 @@ test-regression: lservice3_c.so
 install: lservice3_c.so
 	cp lservice3_c.so $(PREFIX)/lib/lua/5.1/
 	cp lua/lservice3.lua $(PREFIX)/share/lua/5.1/
+	mkdir -p $(PREFIX)/share/lua/5.1/lservice3
+	cp lua/lservice3/scheduler.lua $(PREFIX)/share/lua/5.1/lservice3/
 
 clean:
 	rm -f lservice3_c.$(SO) $(CONTRACT_ABI_TEST) $(SERI_MODULE) $(MAILBOX_TEST) \
