@@ -136,7 +136,8 @@ local function parse_at_string(value)
             hour = hour,
             min = minute,
             sec = second,
-            isdst = -1,
+            -- Omit isdst so LuaJIT/libc can infer DST from local timezone.
+            -- In Lua, numeric -1 is truthy and is treated as DST enabled.
         }
         if not local_epoch then
             fail("timestamp is outside the local time range")
@@ -216,7 +217,7 @@ local function next_daily_deadline(spec, now_ms)
             hour = spec.hour,
             min = spec.minute,
             sec = spec.second,
-            isdst = -1,
+            -- Omit isdst so the local timezone rules determine DST.
         }
     end
 

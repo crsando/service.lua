@@ -78,6 +78,7 @@ test-service: $(SERVICE_TEST)
 
 test-scheduler: lservice3_c.so
 	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_spec.lua
+	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_daily_spec.lua
 
 $(MAILBOX_TSAN_TEST): tests/c/mailbox_test.c src/mailbox.c src/mailbox.h src/message.c src/message.h
 	mkdir -p $(BUILD_DIR)
