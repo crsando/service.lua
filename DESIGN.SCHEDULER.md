@@ -1,8 +1,8 @@
-# lservice3 Scheduler 设计稿
+# service Scheduler 设计稿
 
 文档状态：Draft（仅设计，不包含实现）
 
-本文为 `lservice3.scheduler` 的第一版设计。它补充根目录
+本文为 `service.scheduler` 的第一版设计。它补充根目录
 `README.md`、`DESIGN.md` 以及 `doc/` 中已有的 service、libuv 和生命周期约束；如果
 实现阶段发现公开行为需要改变，应先同步这些公共文档和 contract test。
 
@@ -11,8 +11,8 @@
 调用方已经执行：
 
 ```lua
-local service = require "lservice3"
-service.scheduler = require "lservice3.scheduler"
+local service = require "service"
+service.scheduler = require "service.scheduler"
 ```
 
 之后可使用：
@@ -46,32 +46,32 @@ API 仍可按各自契约创建 timer。项目的每个 service 拥有独立 Lua
 
 ## 2. 模块加载和对象归属
 
-`lservice3` 不自动 `require` scheduler，因此原有程序不会因为升级而多出活跃的
+`service` 不自动 `require` scheduler，因此原有程序不会因为升级而多出活跃的
 timer 或改变 loop 生命周期。手动加载时，推荐使用上面的两行写法。Lua 语法
 `local service.scheduler = ...` 是无效的，`service.scheduler = ...` 才是给字段赋值。
-因此，仅执行 `local service = require "lservice3"` 时，`service.scheduler` 应保持
+因此，仅执行 `local service = require "service"` 时，`service.scheduler` 应保持
 未启用（实现上可为 `nil`）；只有显式 require 并赋值后才提供调度功能。
 
 模块返回当前 Lua VM 内的 singleton scheduler：
 
 ```lua
-local scheduler = require "lservice3.scheduler"
+local scheduler = require "service.scheduler"
 service.scheduler = scheduler
 ```
 
 同一 VM 内重复 `require` 返回同一个对象，也就共用同一个 heap 和 timer。不同
 service 的 `require` 发生在不同 VM 中，模块缓存、heap、timer 和 action 引用天然隔离。
-模块应通过 `require "lservice3"` 取得 service 表，但不应在加载时自动向该表写入
+模块应通过 `require "service"` 取得 service 表，但不应在加载时自动向该表写入
 `scheduler`，以保持“显式启用”和可预测的副作用边界。
 
 Lua 会把模块名中的点转换为目录分隔符；当前 Makefile 的
 `LUA_PATH=./lua/?.lua;;` 因此直接支持标准模块路径：
 
 ```text
-lua/lservice3/scheduler.lua
+lua/service/scheduler.lua
 ```
 
-这样无需改变现有 `LUA_PATH` 即可解析 `require "lservice3.scheduler"`；实现阶段仍需
+这样无需改变现有 `LUA_PATH` 即可解析 `require "service.scheduler"`；实现阶段仍需
 在 `make install` 中复制这个新文件。
 
 在 service source 中，runtime 会自动运行该 service 的 loop，因此 scheduler callback

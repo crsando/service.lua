@@ -1,9 +1,9 @@
-local service = require "lservice3"
+local service = require "service"
 
 -- The source runs in the root service's own Lua VM and libuv loop.
 local source = [[
-local service = require "lservice3".input(...)
-local scheduler = require "lservice3.scheduler"
+local service = require "service".input(...)
+local scheduler = require "service.scheduler"
 service.scheduler = scheduler
 
 local now = os.time()

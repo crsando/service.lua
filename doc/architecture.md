@@ -50,7 +50,7 @@ service_pool_t
 
 | 模块 | 核心职责 | 不负责 |
 | --- | --- | --- |
-| `lua/lservice3.lua` | 参数归一化、session、coroutine、dispatch、timer、错误重抛 | pthread、跨线程锁、裸内存验证 |
+| `lua/service.lua` | 参数归一化、session、coroutine、dispatch、timer、错误重抛 | pthread、跨线程锁、裸内存验证 |
 | `lservice.c` | Lua 栈校验、public/native ABI、所有权边界 | 业务调度策略 |
 | `pool` | ID/name registry、stable handle、pin、pool shutdown | Lua handler 执行 |
 | `service` | pthread、VM、loop、状态机、start/stop/join | 序列化格式 |

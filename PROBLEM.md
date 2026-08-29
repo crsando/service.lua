@@ -196,7 +196,7 @@ callback 现在保存进入时的 stack top，读取一个内部 batch 标记，
 
 - 严重程度：`P1`
 - 状态：`FIXED`
-- 修复：[lua/lservice3.lua](lua/lservice3.lua)、[tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)
+- 修复：[lua/service.lua](lua/service.lua)、[tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)
 
 request coroutine 捕获错误后重新抛给 `resume_session`。该层在清理入站 coroutine 的
 from/session 映射前构造 `MESSAGE_ERROR`；table handler 找不到 command 时返回固定的
@@ -207,7 +207,7 @@ from/session 映射前构造 `MESSAGE_ERROR`；table handler 找不到 command �
 
 - 严重程度：`P1`
 - 状态：`ACCEPTED`
-- 证据：[lua/lservice3.lua:299](lua/lservice3.lua#L299)、[lua/lservice3.lua:331](lua/lservice3.lua#L331)
+- 证据：[lua/service.lua:299](lua/service.lua#L299)、[lua/service.lua:331](lua/service.lua#L331)
 
 当前 `service.call` 不创建 timer。未知命令和 handler 异常已由 ERROR 完成；目标在接受请求后停止、
 消息或 completion 丢失仍会让 coroutine 永久等待。
@@ -219,7 +219,7 @@ from/session 映射前构造 `MESSAGE_ERROR`；table handler 找不到 command �
 
 - 严重程度：`P2`
 - 状态：`FIXED`
-- 证据：[lua/lservice3.lua:195](lua/lservice3.lua#L195)、[tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)
+- 证据：[lua/service.lua:195](lua/service.lua#L195)、[tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)
 
 旧实现的 `session_id` 无限制递增；超过 uint32 后 native binding 会拒绝请求，调用方无法继续发起 RPC。
 
@@ -232,7 +232,7 @@ from/session 映射前构造 `MESSAGE_ERROR`；table handler 找不到 command �
 
 - 严重程度：`P1`
 - 状态：`FIXED`
-- 证据：[src/lservice.c:33](src/lservice.c#L33)、[lua/lservice3.lua:250](lua/lservice3.lua#L250)
+- 证据：[src/lservice.c:33](src/lservice.c#L33)、[lua/service.lua:250](lua/service.lua#L250)
 
 `_lookup` 找不到 name 时返回整数 0，而 root service 的合法 ID 也是 0。`send("typo", ...)` 和 `call("typo", ...)` 因而会把请求发送到 root，而不是报告不存在。
 
@@ -285,7 +285,7 @@ native binding 在转换前检查 uint32 和 `0..31` 范围，`service_pool_pin`
 
 - 严重程度：`P1`
 - 状态：`FIXED`
-- 证据：[lua/lservice3.lua:347](lua/lservice3.lua#L347)、[lua/lservice3.lua:413](lua/lservice3.lua#L413)、[src/service.c:409](src/service.c#L409)
+- 证据：[lua/service.lua:347](lua/service.lua#L347)、[lua/service.lua:413](lua/service.lua#L413)、[src/service.c:409](src/service.c#L409)
 
 handler 调用 `service.quit` 时立即进入 `_stop`。C stop 在当前 libuv callback 内调用 `uv_stop`、`uv_walk`、嵌套 `uv_run` 和 `uv_loop_close`。dispatch 返回前又看到 `quit == true`，再次调用 `service.quit`。
 
@@ -373,7 +373,7 @@ Lua 5.4 通过 `lua_isinteger` 判断 hash 遍历得到的 numeric key 是否已
 
 当前仍可复现的项目：
 
-1. [lua/lservice3.lua:132](lua/lservice3.lua#L132)：`lookup(nil)` 返回 root ID 0，而不是拒绝无效 name 或返回 miss。
+1. [lua/service.lua:132](lua/service.lua#L132)：`lookup(nil)` 返回 root ID 0，而不是拒绝无效 name 或返回 miss。
 
 `recv_message(false)` 现在原样传入 native，dispatcher 明确使用非阻塞模式；true 仅保留兼容调用形式，native 接收始终是 try-pop。standalone 被定义为宿主启动上下文，业务程序不调用 `get_id(addr)` 或 `get_addr(id)`；当前行为按该前置条件接受，不再属于 API-001。旧基线中的全局 `config`、`get_uv_loop(addr)`、查询调试输出、`send_message` 参数错位、空 config 和 send 状态返回问题已经修复，不再属于本项剩余范围。
 
@@ -387,7 +387,7 @@ bootstrap 参数校验和返回契约后置到发布阶段：届时要求 fresh 
 
 - 严重程度：`P2`
 - 状态：`FIXED`
-- 修复：[lua/lservice3.lua](lua/lservice3.lua)、[tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)
+- 修复：[lua/service.lua](lua/service.lua)、[tests/lua/rpc_spec.lua](tests/lua/rpc_spec.lua)
 
 dispatcher 显式处理 REQUEST，以及 session 大于 0 的 RESPONSE/ERROR。其他 type/session 组合
 直接释放 payload，不进入 pending lookup。合法 completion 仍需命中 pending session 才恢复
@@ -431,7 +431,7 @@ gateway 和 remote 把每次 chunk 连接到 Lua string，直到遇到换行；�
 
 示例：
 
-- [lua/lservice3.lua:2](lua/lservice3.lua#L2) 无条件 require `inspect`，实际使用只存在于注释调试代码中。
+- [lua/service.lua:2](lua/service.lua#L2) 无条件 require `inspect`，实际使用只存在于注释调试代码中。
 - Lua 层保留多个未使用 session table、receipt 常量和整段注释实现。
 - C 返回值常使用固定 1，无法表达真实错误。
 - 中英文注释、tab/space 和命名存在混用。

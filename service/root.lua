@@ -1,5 +1,5 @@
 local inspect = require "inspect"
-local service = require "lservice3" .input(...)
+local service = require "service" .input(...)
 
 print("root: if luv loaded",package.loaded["luv"])
 

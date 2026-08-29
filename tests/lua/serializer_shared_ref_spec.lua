@@ -1,4 +1,4 @@
-local service = require "lservice3"
+local service = require "service"
 
 local function round_trip(...)
     local ptr, size = service.pack(...)

@@ -1,6 +1,6 @@
-local service = require "lservice3"
+local service = require "service"
 service.input()
-assert(service.scheduler == nil, "scheduler must not be loaded by lservice3")
+assert(service.scheduler == nil, "scheduler must not be loaded by service")
 
 local uv = service.uv
 local original_gettimeofday = uv.gettimeofday
@@ -39,7 +39,7 @@ uv.new_timer = function()
     return fake_timer
 end
 
-local scheduler = require "lservice3.scheduler"
+local scheduler = require "service.scheduler"
 service.scheduler = scheduler
 
 local at_order = {}
@@ -100,8 +100,8 @@ assert(not invalid_ok, "table actions must be rejected in phase one")
 -- with a fresh scheduler state in the same Lua VM.
 uv.gettimeofday = original_gettimeofday
 uv.new_timer = original_new_timer
-package.loaded["lservice3.scheduler"] = nil
-local real_scheduler = require "lservice3.scheduler"
+package.loaded["service.scheduler"] = nil
+local real_scheduler = require "service.scheduler"
 service.scheduler = real_scheduler
 
 local real_timer_count = 0

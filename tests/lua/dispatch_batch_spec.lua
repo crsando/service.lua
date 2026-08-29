@@ -1,7 +1,7 @@
-local service = require "lservice3"
+local service = require "service"
 
 local exact_batch_source = [[
-local service = require "lservice3" .input(...)
+local service = require "service" .input(...)
 
 local processed = 0
 local idle_calls = 0
@@ -34,7 +34,7 @@ return service.dispatch(S)
 ]]
 
 local fairness_source = [[
-local service = require "lservice3" .input(...)
+local service = require "service" .input(...)
 
 local processed = 0
 local total = 0

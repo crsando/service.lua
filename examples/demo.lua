@@ -1,4 +1,4 @@
-local service = require "lservice3"
+local service = require "service"
 
 --[[
 local root_addr = service.new { source = "@service/root.lua", config = { accounts = accounts } }

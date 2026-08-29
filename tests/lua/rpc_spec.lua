@@ -1,4 +1,4 @@
-local service = require "lservice3"
+local service = require "service"
 
 local function find_upvalue(fn, expected)
     for index = 1, 32 do
@@ -69,7 +69,7 @@ end
 service._send_message = original_send_message
 
 local source = [[
-local service = require "lservice3" .input(...)
+local service = require "service" .input(...)
 
 local allocate_session
 for index = 1, 32 do

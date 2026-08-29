@@ -1,4 +1,4 @@
-local service = require "lservice3" .input(...)
+local service = require "service" .input(...)
 local inspect = require "inspect"
 
 

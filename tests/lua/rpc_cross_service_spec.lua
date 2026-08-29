@@ -1,7 +1,7 @@
-local service = require "lservice3"
+local service = require "service"
 
 local target_source = [[
-local service = require "lservice3" .input(...)
+local service = require "service" .input(...)
 
 local S = {}
 
@@ -36,7 +36,7 @@ return service.dispatch(S)
 ]]
 
 local caller_source = [[
-local service = require "lservice3" .input(...)
+local service = require "service" .input(...)
 
 local S = {}
 local completed = 0

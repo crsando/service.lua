@@ -1,4 +1,4 @@
-local service = require "lservice3"
+local service = require "service"
 service.input()
 
 local uv = service.uv
@@ -47,7 +47,7 @@ uv.new_timer = function()
     return fake_timer
 end
 
-local scheduler = require "lservice3.scheduler"
+local scheduler = require "service.scheduler"
 service.scheduler = scheduler
 
 local fired = 0
@@ -64,6 +64,6 @@ assert(fired == 1, "daily callback should fire at 13:05:00")
 
 uv.gettimeofday = original_gettimeofday
 uv.new_timer = original_new_timer
-package.loaded["lservice3.scheduler"] = nil
+package.loaded["service.scheduler"] = nil
 
 print("scheduler_daily_spec: ok")

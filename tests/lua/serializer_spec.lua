@@ -1,4 +1,4 @@
-local service = require "lservice3"
+local service = require "service"
 
 local function assert_equal(actual, expected, label)
     if actual ~= expected then

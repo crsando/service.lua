@@ -1,7 +1,7 @@
-local service = require "lservice3"
+local service = require "service"
 
 local source = [[
-local service = require "lservice3" .input(...)
+local service = require "service" .input(...)
 local received = 0
 
 return service.dispatch(function(command)

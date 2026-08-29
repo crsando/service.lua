@@ -2,7 +2,7 @@
 
 `service.lua` 是一个面向 LuaJIT 2.1 / Lua 5.1 的进程内、多线程、Actor 风格服务运行时。
 
-项目当前处于重新实现阶段。仓库中的 C/Lua 代码来自 `lservice3` 兼容基线，用于固定调用形式、复现旧问题和验证迁移结果，不代表本文描述的运行时已经完成。已知问题见 [PROBLEM.md](PROBLEM.md)，内部设计见 [doc/](doc/)。
+项目当前处于重新实现阶段。仓库中的 C/Lua 代码来自历史 `lservice3` 兼容基线，用于固定调用形式、复现旧问题和验证迁移结果，不代表本文描述的运行时已经完成。已知问题见 [PROBLEM.md](PROBLEM.md)，内部设计见 [doc/](doc/)。
 
 ## 项目初心
 
@@ -14,7 +14,7 @@
 - Lua 负责编排和业务逻辑；C 只负责线程、邮箱、唤醒、路由、生命周期和序列化等运行时关键路径。
 - 优先保证正确性、错误可见性和资源所有权，再讨论无锁结构或极限吞吐。
 
-“兼容”指保留正确使用 `lservice3` 公开接口的 Lua 源码和行为习惯，不包括旧实现中的静默丢消息、错误路由、进程断言、永久挂起或泄漏。
+“兼容”指保留正确使用 `service` 公开接口的 Lua 源码和行为习惯，不包括旧实现中的静默丢消息、错误路由、进程断言、永久挂起或泄漏。
 
 ## 核心模型
 
@@ -77,7 +77,7 @@ NEW -> STARTING -> RUNNING -> STOPPING -> STOPPED -> JOINED -> FREED
 | 层级 | 稳定性承诺 |
 | --- | --- |
 | Lua 公共 API | 函数名、参数形式、成功结果和错误语义保持兼容 |
-| `lservice3_c` Lua C ABI | 导出函数名、Lua 栈参数和返回值保持兼容 |
+| `service_c` Lua C ABI | 导出函数名、Lua 栈参数和返回值保持兼容 |
 | 消息 ABI | message type 数值、32 位 service/session ID 保持稳定 |
 | 序列化 ABI | 当前沿用 `lua-seri`，只稳定 Lua API，不承诺字节格式 |
 | 内部 C ABI | `service_t`、`pool_t`、`mailbox_t` 布局不对外稳定 |
@@ -86,16 +86,35 @@ NEW -> STARTING -> RUNNING -> STOPPING -> STOPPED -> JOINED -> FREED
 原生模块入口必须为：
 
 ```c
-int luaopen_lservice3_c(lua_State *L);
+int luaopen_service_c(lua_State *L);
 ```
 
 运行基线为 Linux、LuaJIT 2.1 / Lua 5.1 C API、pthread、libuv 和 luv。
+
+## 历史名称与迁移
+
+本项目已完成从历史模块名到 `service` 的严格改名。下表仅用于迁移旧代码和清理旧安装，不表示运行时继续提供兼容别名：
+
+| 历史名称 | 当前名称 |
+| --- | --- |
+| `lservice3` | `service` |
+| `lservice3_c` | `service_c` |
+| `lservice3.scheduler` | `service.scheduler` |
+| `luaopen_lservice3_c` | `luaopen_service_c` |
+| `lua/lservice3.lua` | `lua/service.lua` |
+| `lua/lservice3/scheduler.lua` | `lua/service/scheduler.lua` |
+| C binding 源文件（文件名保持不变） | `src/lservice.c` |
+| `lservice3_c.so` | `service_c.so` |
+
+严格改名后，代码应使用 `require "service"`、`require "service_c"` 和
+`require "service.scheduler"`。构建与安装流程也只生成、安装当前名称；旧的
+`lservice3` 文件不会由本项目自动删除，已安装到系统目录的历史文件应在单独的维护步骤中清理。
 
 ## 最小示例
 
 ```lua
 -- service/echo.lua
-local service = require "lservice3"
+local service = require "service"
 
 return service.dispatch(function(command, ...)
     if command == "echo" then
@@ -106,7 +125,7 @@ end)
 ```
 
 ```lua
-local service = require "lservice3"
+local service = require "service"
 
 assert(service.bootstrap {
     source = "@service/root.lua",
@@ -122,7 +141,7 @@ source 支持 `@path/to/file.lua` 和 Lua 源码字符串两种形式。service 
 公共模块只有一个：
 
 ```lua
-local service = require "lservice3"
+local service = require "service"
 ```
 
 除非接口明确返回 `nil, error`，参数错误、非法调用上下文和不能恢复的运行时错误均抛出 Lua error。
@@ -133,7 +152,7 @@ local service = require "lservice3"
 | --- | --- | --- |
 | `service.self` | `lightuserdata\|nil` | 当前 service addr；standalone 为 nil |
 | `service.pool` | `lightuserdata\|nil` | 当前 pool；由 native 绑定或 `input/new/bootstrap` 管理 |
-| `service.scheduler` | `table\|nil` | 可选的 `lservice3.scheduler` singleton；手动加载后赋值 |
+| `service.scheduler` | `table\|nil` | 可选的 `service.scheduler` singleton；手动加载后赋值 |
 | `service.uv` | `table` | 已绑定当前 service 专属 loop 的 luv 模块 |
 | `service.config` | `table` | 当前 service 配置；无配置时必须是空 table |
 | `service.yield_session` | `function` | `coroutine.yield` 的兼容别名 |
@@ -329,11 +348,11 @@ service.set_timeout(milliseconds, callback) -> luv_timer
 
 ### 可选 Scheduler
 
-调度器不会随 `lservice3` 自动加载。需要时显式加载当前 VM 对应的 scheduler：
+调度器不会随 `service` 自动加载。需要时显式加载当前 VM 对应的 scheduler：
 
 ```lua
-local service = require "lservice3"
-service.scheduler = require "lservice3.scheduler"
+local service = require "service"
+service.scheduler = require "service.scheduler"
 
 service.scheduler:at(os.time() + 10, function()
     -- 约十秒后执行；若 loop 当时繁忙，恢复后补执行一次
@@ -377,9 +396,9 @@ service.remove(ptr, size) -> nil
 - 支持 nil、boolean、number、binary string、table、循环/共享 table、lightuserdata 和无 upvalue 的 C function。
 - 不支持 full userdata、Lua closure、thread/coroutine 和带 upvalue 的 C closure。
 
-## `lservice3_c` 原生 ABI
+## `service_c` 原生 ABI
 
-原生模块仅面向可信的 `lua/lservice3.lua` 兼容层和诊断代码。ID、容量和状态仍需正常校验；service/pool lightuserdata 的来源当前信任上游运行时，不把 native ABI 暴露给网络或不可信 Lua。若未来扩大信任边界，再启用完整 registry/provenance 校验。
+原生模块仅面向可信的 `lua/service.lua` 兼容层和诊断代码。ID、容量和状态仍需正常校验；service/pool lightuserdata 的来源当前信任上游运行时，不把 native ABI 暴露给网络或不可信 Lua。若未来扩大信任边界，再启用完整 registry/provenance 校验。
 
 | 函数 | Lua 栈签名 | 成功结果 |
 | --- | --- | --- |
@@ -473,7 +492,7 @@ typedef struct message {
 } message_t;
 ```
 
-字段语义和数值稳定，但 `message_t` 的 padding、字段名及完整内存布局不是对外插件 ABI。外部代码必须通过 `lservice3_c` 调用，不得跨动态库直接分配内部 message。
+字段语义和数值稳定，但 `message_t` 的 padding、字段名及完整内存布局不是对外插件 ABI。外部代码必须通过 `service_c` 调用，不得跨动态库直接分配内部 message。
 
 receipt 常量只为旧代码保留，第一版不实现 receipt 协议：
 
@@ -500,7 +519,7 @@ service.lua/
 ├── DESIGN.md                初始合并设计稿，供追溯
 ├── PROBLEM.md               兼容基线已知问题
 ├── doc/                     模块化内部设计
-├── lua/lservice3.lua        Lua 公共兼容层
+├── lua/service.lua         Lua 公共 API
 ├── src/                     C runtime 与 binding
 ├── service/                 示例 service
 ├── examples/                启动示例

@@ -53,7 +53,7 @@ pthread_once
     -> retain handle until process exit
 ```
 
-这里的“一次”只指 `dlopen/dlsym`。luv 的 C 代码和函数地址由进程共享，但 Lua table、registry、userdata 和 callback 状态不能跨 VM 共享。宿主 VM 加载 `lservice3_c` 时优先从其 `package.cpath` 确定路径；直接使用 native C API 时，由第一个 service VM 惰性完成同一初始化。第一次初始化的成功或失败结果在进程内保持不变，不按 service 重试或切换 luv 版本。
+这里的“一次”只指 `dlopen/dlsym`。luv 的 C 代码和函数地址由进程共享，但 Lua table、registry、userdata 和 callback 状态不能跨 VM 共享。宿主 VM 加载 `service_c` 时优先从其 `package.cpath` 确定路径；直接使用 native C API 时，由第一个 service VM 惰性完成同一初始化。第一次初始化的成功或失败结果在进程内保持不变，不按 service 重试或切换 luv 版本。
 
 每个 service VM：
 
@@ -75,7 +75,7 @@ POSIX 允许 `dlsym` 结果用于函数指针，但直接赋值会触发 `-Wpeda
 - 检查文件大小上限和所有 IO 返回值。
 - chunk name 保留 `@path`，使 traceback 包含正确文件名。
 - 源码字符串使用显式长度接口，后续如支持 binary chunk 必须由配置启用。
-- native 在 source 执行前加载 `lservice3` 并绑定 `(service_addr, config_ptr)`；source 中显式调用同一 addr 的 `service.input` 是幂等的。
+- native 在 source 执行前加载 `service` 并绑定 `(service_addr, config_ptr)`；source 中显式调用同一 addr 的 `service.input` 是幂等的。
 - source 可以返回 function，或返回由 `service.dispatch` 接受的 handler table；table 由 native 侧转换为 dispatcher。其他结果是 `SERVICE_START_FAILED`。
 - config buffer 在 source 初始化期间由 native 持有；`service.input` 只调用 `unpack` 借用读取，source 初始化成功或失败返回后由 native 释放。业务代码不得保存 config_ptr。
 

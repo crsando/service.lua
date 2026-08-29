@@ -1,7 +1,7 @@
-local service = require "lservice3"
+local service = require "service"
 
 local source = [[
-local service = require "lservice3" .input(...)
+local service = require "service" .input(...)
 local native_recv_message = service._recv_message
 
 service._recv_message = function(self, blocking)

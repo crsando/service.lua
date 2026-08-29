@@ -274,15 +274,15 @@ static int
 service_push_lservice_module(lua_State *L) {
     lua_getglobal(L, "require");
     if (!lua_isfunction(L, -1)) {
-        lua_pushliteral(L, "lservice3 require is unavailable");
+        lua_pushliteral(L, "service require is unavailable");
         return EINVAL;
     }
-    lua_pushliteral(L, "lservice3");
+    lua_pushliteral(L, "service");
     if (lua_pcall(L, 1, 1, 0) != LUA_OK)
         return EINVAL;
     if (!lua_istable(L, -1)) {
         lua_pop(L, 1);
-        lua_pushliteral(L, "lservice3 module did not return a table");
+        lua_pushliteral(L, "service module did not return a table");
         return EINVAL;
     }
     return 0;
@@ -300,7 +300,7 @@ service_bind_lservice(service_t *service, lua_State *L) {
     lua_getfield(L, module_index, "input");
     if (!lua_isfunction(L, -1)) {
         lua_settop(L, top);
-        lua_pushliteral(L, "lservice3.input is unavailable");
+        lua_pushliteral(L, "service.input is unavailable");
         return EINVAL;
     }
     lua_pushlightuserdata(L, service);
@@ -319,7 +319,7 @@ service_normalize_handler(lua_State *L) {
     int result_index = lua_gettop(L);
     int module_index;
 
-    /* lservice3.lua keeps its module table local; require returns the handle. */
+    /* service.lua keeps its module table local; require returns the handle. */
     if (service_push_lservice_module(L) != 0)
         return EINVAL;
     module_index = lua_gettop(L);
@@ -327,7 +327,7 @@ service_normalize_handler(lua_State *L) {
     lua_getfield(L, module_index, "dispatch");
     if (!lua_isfunction(L, -1)) {
         lua_settop(L, result_index);
-        lua_pushliteral(L, "lservice3.dispatch is unavailable");
+        lua_pushliteral(L, "service.dispatch is unavailable");
         return EINVAL;
     }
     lua_pushvalue(L, result_index);

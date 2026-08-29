@@ -1,5 +1,5 @@
-local service = require "lservice3"
-local native = require "lservice3_c"
+local service = require "service"
+local native = require "service_c"
 
 local function assert_functions(module, names, label)
     for _, name in ipairs(names) do
@@ -38,7 +38,7 @@ assert_functions(service, {
     "unpack",
     "unpack_remove",
     "remove",
-}, "lservice3")
+}, "service")
 
 assert_functions(native, {
     "_pool_new",
@@ -59,7 +59,7 @@ assert_functions(native, {
     "unpack",
     "unpack_remove",
     "remove",
-}, "lservice3_c")
+}, "service_c")
 
 assert(type(service.uv) == "table", "service.uv must be the luv module")
 assert(service.yield_session == coroutine.yield, "yield_session compatibility alias changed")

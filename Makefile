@@ -32,9 +32,9 @@ SRCS=\
 
 .PHONY: all test test-contract test-mailbox test-service test-scheduler test-tsan test-regression install clean
 
-all: lservice3_c.so
+all: service_c.so
 
-lservice3_c.so: $(SRCS)
+service_c.so: $(SRCS)
 	$(CC) $(CFLAGS) $(SHARED) $(LUAINC) -Isrc -o $@ $^ $(LIBS)
 
 test: test-contract test-mailbox test-service
@@ -56,7 +56,7 @@ $(SERI_MODULE): src/lua-seri.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DTEST_SERI $(SHARED) $(LUAINC) -Isrc -o $@ $< -lluajit-5.1
 
-test-contract: lservice3_c.so $(CONTRACT_ABI_TEST) $(SERI_MODULE)
+test-contract: service_c.so $(CONTRACT_ABI_TEST) $(SERI_MODULE)
 	$(LUA_ENV) luajit tests/contract/api_surface_spec.lua
 	env 'LUA_CPATH=./$(BUILD_DIR)/?.so;;' luajit tests/contract/serializer_module_spec.lua
 	$(CONTRACT_ABI_TEST)
@@ -77,7 +77,7 @@ $(SERVICE_TEST): $(SERVICE_TEST_SRCS) src/service.h src/loadluv.h
 test-service: $(SERVICE_TEST)
 	$(LUA_ENV) $(SERVICE_TEST)
 
-test-scheduler: lservice3_c.so
+test-scheduler: service_c.so
 	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_daily_spec.lua
 
@@ -95,16 +95,16 @@ test-tsan: $(MAILBOX_TSAN_TEST) $(SERVICE_TSAN_TEST)
 	setarch $(shell uname -m) -R env TSAN_OPTIONS=halt_on_error=1 $(MAILBOX_TSAN_TEST)
 	$(LUA_ENV) setarch $(shell uname -m) -R env TSAN_OPTIONS=halt_on_error=1 $(SERVICE_TSAN_TEST)
 
-test-regression: lservice3_c.so
+test-regression: service_c.so
 	$(LUA_ENV) luajit tests/lua/serializer_shared_ref_spec.lua
 
-install: lservice3_c.so
-	cp lservice3_c.so $(PREFIX)/lib/lua/5.1/
-	cp lua/lservice3.lua $(PREFIX)/share/lua/5.1/
-	mkdir -p $(PREFIX)/share/lua/5.1/lservice3
-	cp lua/lservice3/scheduler.lua $(PREFIX)/share/lua/5.1/lservice3/
+install: service_c.so
+	cp service_c.so $(PREFIX)/lib/lua/5.1/
+	cp lua/service.lua $(PREFIX)/share/lua/5.1/
+	mkdir -p $(PREFIX)/share/lua/5.1/service
+	cp lua/service/scheduler.lua $(PREFIX)/share/lua/5.1/service/
 
 clean:
-	rm -f lservice3_c.$(SO) $(CONTRACT_ABI_TEST) $(SERI_MODULE) $(MAILBOX_TEST) \
+	rm -f service_c.$(SO) $(CONTRACT_ABI_TEST) $(SERI_MODULE) $(MAILBOX_TEST) \
 		$(MAILBOX_TSAN_TEST) $(SERVICE_TEST) $(SERVICE_TSAN_TEST)
 	rmdir $(BUILD_DIR) 2>/dev/null || true

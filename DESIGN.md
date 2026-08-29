@@ -7,7 +7,7 @@
 >
 > 目标项目：`~/src/service.lua`
 >
-> 兼容基线：`lservice3`
+> 当前模块名：`service`；历史兼容基线和旧名称见 [README.md](README.md) 的“历史名称与迁移”。
 >
 > 运行环境：Linux、LuaJIT 2.1 / Lua 5.1 C API、pthread、libuv
 
@@ -15,7 +15,7 @@
 
 `service.lua` 是一个进程内、多线程、Actor 风格的 Lua 服务运行时。每个 service 拥有独立的 pthread、LuaJIT VM、libuv loop 和消息邮箱；service 之间只通过消息通信。Lua 层提供简单的 `spawn`、`send`、`call`、`dispatch`、`sleep` 等接口，C 层负责线程、邮箱、唤醒、生命周期和序列化。
 
-本项目保留 `lservice3` 的调用接口和熟悉的编码方式，但不复制其已知缺陷。新实现必须系统解决以下问题：
+本项目保留 `service` 的调用接口和熟悉的编码方式，但不复制其已知缺陷。新实现必须系统解决以下问题：
 
 1. 多个 service 同时写入同一邮箱时的数据竞争。
 2. 邮箱满时静默丢消息和泄漏消息内存。
@@ -33,8 +33,8 @@
 
 ### 2.1 必须实现
 
-- 保持 `require "lservice3"` 及现有 Lua API 的调用形式。
-- 保持 `lservice3_c` 原生模块名称和 `_` 前缀底层 API。
+- 保持 `require "service"` 及现有 Lua API 的调用形式。
+- 保持 `service_c` 原生模块名称和 `_` 前缀底层 API。
 - 保持 service source 的两种形式：`@path/to/file.lua` 和 Lua 源码字符串。
 - 保持 service source 接收 `(service_addr, config_ptr)` 并返回消息 handler function 或 handler table 的约定；table 由 native 侧调用 `service.dispatch` 转换。
 - 保持 `dispatch(function)` 和 `dispatch(table)` 两种处理器形式。
@@ -74,7 +74,7 @@
 - Lua 作为公共接口和业务编排层，C 只承载运行时关键路径。
 - API 以简单函数为主，不引入复杂 class 框架。
 - 公共模块使用 `service.*`，底层绑定使用 `service._*`。
-- service 文件通常以 `local service = require "lservice3"` 开头；native 会在 source 执行前完成当前 service 的绑定。
+- service 文件通常以 `local service = require "service"` 开头；native 会在 source 执行前完成当前 service 的绑定。
 - handler table 使用简短的 `local S = {}`，命令名直接映射为 `S.command`。
 - 常量使用大写下划线命名，例如 `MESSAGE_REQUEST`。
 - Lua 局部变量和函数使用 `snake_case`；service API 使用点调用。
@@ -106,10 +106,10 @@ service.lua/
 ├── Makefile
 ├── service.lua.rockspec            # 可选发布入口
 ├── lua/
-│   ├── lservice3.lua               # 兼容公共 API
-│   └── service.lua                 # 可选别名，返回同一模块
+│   ├── service.lua               # 公共 API
+│   └── service/scheduler.lua     # 可选 scheduler
 ├── src/
-│   ├── lservice.c                  # Lua C API 绑定
+│   ├── lservice.c                  # Lua C API 绑定（保留历史文件名）
 │   ├── service.c
 │   ├── service.h
 │   ├── pool.c
@@ -149,7 +149,7 @@ service.lua/
         └── demo_spec.lua
 ```
 
-`lua/lservice3.lua` 是唯一必须兼容的公共入口。`lua/service.lua` 如果提供，只能是薄别名，不得形成第二套状态。
+`lua/service.lua` 是唯一的公共入口；项目不再提供旧模块名或运行时别名。
 
 ## 6. 总体架构
 
@@ -187,7 +187,7 @@ target mailbox ──uv_async_send──> target loop
 
 | 模块 | 职责 |
 | --- | --- |
-| `lservice3.lua` | 参数归一化、session、协程调度、dispatch、timer、错误重抛 |
+| `service.lua` | 参数归一化、session、协程调度、dispatch、timer、错误重抛 |
 | `lservice.c` | 严格校验 Lua 参数，将 Lua API 映射到 C 运行时 |
 | `pool` | service ID/name 注册、查找、注销、池级生命周期 |
 | `service` | 线程、Lua VM、libuv loop、状态机、启动/停止/join |
@@ -414,7 +414,7 @@ libuv loop 和两个 async handle 由 `service_start` 创建的目标 pthread �
 模块名继续为：
 
 ```lua
-local service = require "lservice3"
+local service = require "service"
 ```
 
 ### 9.1 模块状态字段
@@ -596,7 +596,7 @@ service.bootstrap {
 
 ## 10. 原生 C 接口
 
-`luaopen_lservice3_c` 继续导出以下函数：
+`luaopen_service_c` 继续导出以下函数：
 
 | 函数 | 参数 | 返回 |
 | --- | --- | --- |
@@ -880,12 +880,12 @@ gateway 示例额外依赖 `lua-cjson`。`inspect` 只允许作为开发依赖�
 ### 20.2 Makefile 目标
 
 ```text
-make             构建 lservice3_c.so
+make             构建 service_c.so
 make test        运行 C、Lua 和集成测试
 make test-tsan   运行 mailbox/service 并发测试
 make test-asan   运行内存和未定义行为检查
 make lint        编译告警、Lua 语法和静态检查
-make install     安装 C 模块和 lua/lservice3.lua
+make install     安装 C 模块和 lua/service.lua
 make clean       只删除明确的构建目录
 ```
 
@@ -1027,7 +1027,7 @@ make clean       只删除明确的构建目录
 
 ## 25. 兼容验收清单
 
-- [ ] `require "lservice3"` 成功。
+- [ ] `require "service"` 成功。
 - [ ] `service.input(...)` 返回同一个 service 模块表。
 - [ ] 旧式 `return service.dispatch(S)` service 可直接运行。
 - [ ] `new/start/join/spawn/bootstrap` 调用形式不变。

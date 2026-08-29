@@ -1,4 +1,4 @@
-local service = require "lservice3"
+local service = require "service"
 
 service.input()
 
@@ -13,7 +13,7 @@ return S
 ]]
 
 local caller_source = [[
-local service = require "lservice3"
+local service = require "service"
 
 return service.dispatch(function(command, ...)
     assert(command == "boot")

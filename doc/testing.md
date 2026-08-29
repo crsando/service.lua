@@ -19,8 +19,8 @@
 
 固定不依赖内部结构的兼容表面：
 
-- `require "lservice3"` 和所有 Lua 公共函数。
-- `require "lservice3_c"` 和全部 native export。
+- `require "service"` 和所有 Lua 公共函数。
+- `require "service_c"` 和全部 native export。
 - message type 数值和 service/session ID 宽度。
 - source/handler 形式和基本返回类型。
 
