@@ -271,6 +271,73 @@ service_init_loop(service_t *service) {
 }
 
 static int
+service_normalize_handler(service_t *service, lua_State *L) {
+    int result_index = lua_gettop(L);
+    int module_index;
+    bool input_ready;
+    int argument_count;
+
+    /* lservice3.lua keeps its module table local; require returns the handle. */
+    lua_getglobal(L, "require");
+    if (!lua_isfunction(L, -1)) {
+        lua_settop(L, result_index);
+        lua_pushliteral(L, "lservice3 require is unavailable");
+        return EINVAL;
+    }
+    lua_pushliteral(L, "lservice3");
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK)
+        return EINVAL;
+    if (!lua_istable(L, -1)) {
+        lua_settop(L, result_index);
+        lua_pushliteral(L, "lservice3 module did not return a table");
+        return EINVAL;
+    }
+    module_index = lua_gettop(L);
+
+    /* A table-only source has not run service.input itself. */
+    lua_getfield(L, module_index, "self");
+    input_ready = lua_islightuserdata(L, -1) &&
+        lua_touserdata(L, -1) == service;
+    lua_pop(L, 1);
+    if (!input_ready) {
+        lua_getfield(L, module_index, "input");
+        if (!lua_isfunction(L, -1)) {
+            lua_settop(L, result_index);
+            lua_pushliteral(L, "lservice3.input is unavailable");
+            return EINVAL;
+        }
+        lua_pushlightuserdata(L, service);
+        argument_count = 1;
+        if (service->config != NULL) {
+            lua_pushlightuserdata(L, service->config);
+            argument_count++;
+        }
+        if (lua_pcall(L, argument_count, 0, 0) != LUA_OK)
+            return EINVAL;
+    }
+
+    lua_getfield(L, module_index, "dispatch");
+    if (!lua_isfunction(L, -1)) {
+        lua_settop(L, result_index);
+        lua_pushliteral(L, "lservice3.dispatch is unavailable");
+        return EINVAL;
+    }
+    lua_pushvalue(L, result_index);
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK)
+        return EINVAL;
+    if (!lua_isfunction(L, -1)) {
+        lua_settop(L, result_index);
+        lua_pushliteral(L, "service.dispatch did not return a function");
+        return EINVAL;
+    }
+
+    /* Keep only the normalized handler at the original result index. */
+    lua_replace(L, result_index);
+    lua_settop(L, result_index);
+    return 0;
+}
+
+static int
 service_init_lua(service_t *service) {
     lua_State *L = luaL_newstate();
     int argument_count = 1;
@@ -299,6 +366,13 @@ service_init_lua(service_t *service) {
         free(service->config);
         service->config = NULL;
         log_error("service %u init: %s", service->id,
+            lua_tostring(L, -1));
+        return EINVAL;
+    }
+    if (lua_istable(L, -1) && service_normalize_handler(service, L) != 0) {
+        free(service->config);
+        service->config = NULL;
+        log_error("service %u handler: %s", service->id,
             lua_tostring(L, -1));
         return EINVAL;
     }

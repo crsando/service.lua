@@ -36,7 +36,7 @@
 - 保持 `require "lservice3"` 及现有 Lua API 的调用形式。
 - 保持 `lservice3_c` 原生模块名称和 `_` 前缀底层 API。
 - 保持 service source 的两种形式：`@path/to/file.lua` 和 Lua 源码字符串。
-- 保持 service source 接收 `(service_addr, config_ptr)` 并返回消息 handler 的约定。
+- 保持 service source 接收 `(service_addr, config_ptr)` 并返回消息 handler function 或 handler table 的约定；table 由 native 侧调用 `service.dispatch` 转换。
 - 保持 `dispatch(function)` 和 `dispatch(table)` 两种处理器形式。
 - 保持 `send` 的单向语义以及 `call` 的请求/响应语义。
 - 每个 service 使用独立 LuaJIT VM、pthread 和 libuv loop。

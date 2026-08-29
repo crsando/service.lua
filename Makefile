@@ -45,6 +45,7 @@ test: test-contract test-mailbox test-service
 	timeout 10s $(LUA_ENV) luajit tests/lua/rpc_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/rpc_cross_service_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/dispatch_batch_spec.lua
+	timeout 10s $(LUA_ENV) luajit tests/lua/table_source_spec.lua
 	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_spec.lua
 
 $(CONTRACT_ABI_TEST): tests/contract/message_abi_test.c src/message.h

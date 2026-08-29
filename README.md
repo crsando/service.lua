@@ -115,7 +115,7 @@ assert(service.bootstrap {
 })
 ```
 
-source 支持 `@path/to/file.lua` 和 Lua 源码字符串两种形式。service source 接收 `(service_addr, config_ptr)`，执行后必须返回由 `service.dispatch` 生成的 handler function。
+source 支持 `@path/to/file.lua` 和 Lua 源码字符串两种形式。service source 接收 `(service_addr, config_ptr)`，执行后可以返回 dispatcher function，也可以返回 handler table；后者由 native 侧调用 `service.dispatch(table)` 转换为 dispatcher。table 形式会在 source 未调用 `service.input` 时由 native 自动绑定当前 service。
 
 ## Lua 公共 API
 

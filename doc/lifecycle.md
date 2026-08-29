@@ -69,7 +69,7 @@ service pthread：
 2. 创建 Lua VM、打开标准库。
 3. 通过进程级 luv loader 绑定专属 loop。
 4. 加载 source，始终传入 `(addr, config_ptr_or_nil)`；Lua 只借用 config 解包，`lua_pcall` 返回后由 native 释放。
-5. 执行 source 并确认返回 function。
+5. 执行 source；function 直接作为 handler，table 通过 `service.dispatch` 转换为 handler。
 6. 如果 stop 尚未请求，发布 RUNNING 并 signal condition。
 7. 如果 mailbox 已有预入队消息，触发 inbox async。
 8. 运行 `uv_run(UV_RUN_DEFAULT)`。
