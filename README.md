@@ -95,7 +95,7 @@ int luaopen_lservice3_c(lua_State *L);
 
 ```lua
 -- service/echo.lua
-local service = require "lservice3" .input(...)
+local service = require "lservice3"
 
 return service.dispatch(function(command, ...)
     if command == "echo" then
@@ -115,7 +115,7 @@ assert(service.bootstrap {
 })
 ```
 
-source 支持 `@path/to/file.lua` 和 Lua 源码字符串两种形式。service source 接收 `(service_addr, config_ptr)`，执行后可以返回 dispatcher function，也可以返回 handler table；后者由 native 侧调用 `service.dispatch(table)` 转换为 dispatcher。table 形式会在 source 未调用 `service.input` 时由 native 自动绑定当前 service。
+source 支持 `@path/to/file.lua` 和 Lua 源码字符串两种形式。service source 接收 `(service_addr, config_ptr)`，执行后可以返回 dispatcher function，也可以返回 handler table；后者由 native 侧调用 `service.dispatch(table)` 转换为 dispatcher。native 会在 source 执行前自动绑定当前 service，显式调用 `service.input(...)` 仍然兼容且对同一 addr 幂等。
 
 ## Lua 公共 API
 
@@ -132,7 +132,7 @@ local service = require "lservice3"
 | 字段 | 类型 | 规范 |
 | --- | --- | --- |
 | `service.self` | `lightuserdata\|nil` | 当前 service addr；standalone 为 nil |
-| `service.pool` | `lightuserdata\|nil` | 当前 pool；由 `input/new/bootstrap` 管理 |
+| `service.pool` | `lightuserdata\|nil` | 当前 pool；由 native 绑定或 `input/new/bootstrap` 管理 |
 | `service.scheduler` | `table\|nil` | 可选的 `lservice3.scheduler` singleton；手动加载后赋值 |
 | `service.uv` | `table` | 已绑定当前 service 专属 loop 的 luv 模块 |
 | `service.config` | `table` | 当前 service 配置；无配置时必须是空 table |
@@ -146,8 +146,8 @@ local service = require "lservice3"
 service.input(service_addr?, config_ptr?) -> service
 ```
 
-- service source 的标准入口。
-- 有 addr 时绑定 `self/pool`，借用 config buffer 完成解包；source 初始化返回后由 native 统一释放该 buffer，初始化异常路径同样只释放一次。
+- standalone/service source 的上下文绑定入口。
+- 有 addr 时绑定 `self/pool`，借用 config buffer 完成解包；service VM 由 native 在 source 执行前自动调用，source 中显式调用同一 addr 时直接返回；source 初始化返回后由 native 统一释放该 buffer，初始化异常路径同样只释放一次。
 - config 缺省时设置 `service.config = {}`。
 - 无 addr 时进入 standalone 上下文并清空旧 service 状态。
 - 返回同一个 `service` 模块 table。

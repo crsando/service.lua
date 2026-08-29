@@ -138,6 +138,9 @@ end
 
 function service.input(s, config_ptr)
     if s then
+        if service.self == s then
+            return service
+        end
         service.self = s
         service.pool = service.get_pool(s)
         -- The native start path owns and frees config_ptr after source init.

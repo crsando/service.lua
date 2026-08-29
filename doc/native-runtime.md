@@ -75,8 +75,9 @@ POSIX 允许 `dlsym` 结果用于函数指针，但直接赋值会触发 `-Wpeda
 - 检查文件大小上限和所有 IO 返回值。
 - chunk name 保留 `@path`，使 traceback 包含正确文件名。
 - 源码字符串使用显式长度接口，后续如支持 binary chunk 必须由配置启用。
+- native 在 source 执行前加载 `lservice3` 并绑定 `(service_addr, config_ptr)`；source 中显式调用同一 addr 的 `service.input` 是幂等的。
 - source 可以返回 function，或返回由 `service.dispatch` 接受的 handler table；table 由 native 侧转换为 dispatcher。其他结果是 `SERVICE_START_FAILED`。
-- config buffer 在 source 初始化期间由 native 持有；`service.input` 只调用 `unpack` 借用读取，`lua_pcall` 成功或失败返回后由 native 释放。业务代码不得保存 config_ptr。
+- config buffer 在 source 初始化期间由 native 持有；`service.input` 只调用 `unpack` 借用读取，source 初始化成功或失败返回后由 native 释放。业务代码不得保存 config_ptr。
 
 ## 日志
 

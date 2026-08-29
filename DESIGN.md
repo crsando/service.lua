@@ -74,7 +74,7 @@
 - Lua 作为公共接口和业务编排层，C 只承载运行时关键路径。
 - API 以简单函数为主，不引入复杂 class 框架。
 - 公共模块使用 `service.*`，底层绑定使用 `service._*`。
-- service 文件以 `local service = require "lservice3" .input(...)` 开头。
+- service 文件通常以 `local service = require "lservice3"` 开头；native 会在 source 执行前完成当前 service 的绑定。
 - handler table 使用简短的 `local S = {}`，命令名直接映射为 `S.command`。
 - 常量使用大写下划线命名，例如 `MESSAGE_REQUEST`。
 - Lua 局部变量和函数使用 `snake_case`；service API 使用点调用。
@@ -429,7 +429,7 @@ local service = require "lservice3"
 | `service.config` | 当前 service 解包后的配置；无配置时为空 table |
 | `service.yield_session` | `coroutine.yield` 的兼容别名 |
 
-这些字段由 `input` 初始化。service 文件不得直接修改 `self` 和 `pool`。
+这些字段由 native 启动步骤或显式 `input` 初始化。service 文件不得直接修改 `self` 和 `pool`。
 
 ### 9.2 `service.input`
 
@@ -437,11 +437,11 @@ local service = require "lservice3"
 service.input(service_addr, config_ptr) -> service
 ```
 
-- service source 的标准入口。
-- 有 `service_addr` 时绑定 `self`、pool 和 config。
+- standalone 的上下文切换入口；service VM 由 native 在 source 执行前自动调用。
+- 有 `service_addr` 时绑定 `self`、pool 和 config；同一 addr 的重复调用是幂等的。
 - 无 config 时 `service.config = {}`，不得为 nil。
 - standalone 调用 `service.input()` 时清空 service 上下文，但可按需创建 pool。
-- config 解包成功后立即释放 config buffer，并把 C 侧指针清空，防止悬空所有权。
+- config buffer 由 native 持有到 source 初始化返回后再释放，并把 C 侧指针清空，防止悬空所有权。
 
 ### 9.3 创建与控制
 

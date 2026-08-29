@@ -75,7 +75,7 @@ $(SERVICE_TEST): $(SERVICE_TEST_SRCS) src/service.h src/loadluv.h
 		-o $@ $(SERVICE_TEST_SRCS) $(LIBS)
 
 test-service: $(SERVICE_TEST)
-	$(SERVICE_TEST)
+	$(LUA_ENV) $(SERVICE_TEST)
 
 test-scheduler: lservice3_c.so
 	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_spec.lua
@@ -93,7 +93,7 @@ $(SERVICE_TSAN_TEST): $(SERVICE_TEST_SRCS) src/service.h src/loadluv.h
 
 test-tsan: $(MAILBOX_TSAN_TEST) $(SERVICE_TSAN_TEST)
 	setarch $(shell uname -m) -R env TSAN_OPTIONS=halt_on_error=1 $(MAILBOX_TSAN_TEST)
-	setarch $(shell uname -m) -R env TSAN_OPTIONS=halt_on_error=1 $(SERVICE_TSAN_TEST)
+	$(LUA_ENV) setarch $(shell uname -m) -R env TSAN_OPTIONS=halt_on_error=1 $(SERVICE_TSAN_TEST)
 
 test-regression: lservice3_c.so
 	$(LUA_ENV) luajit tests/lua/serializer_shared_ref_spec.lua

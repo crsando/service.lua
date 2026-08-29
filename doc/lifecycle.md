@@ -68,11 +68,12 @@ service pthread：
 1. 初始化 uv loop、inbox async 和 control async。
 2. 创建 Lua VM、打开标准库。
 3. 通过进程级 luv loader 绑定专属 loop。
-4. 加载 source，始终传入 `(addr, config_ptr_or_nil)`；Lua 只借用 config 解包，`lua_pcall` 返回后由 native 释放。
-5. 执行 source；function 直接作为 handler，table 通过 `service.dispatch` 转换为 handler。
-6. 如果 stop 尚未请求，发布 RUNNING 并 signal condition。
-7. 如果 mailbox 已有预入队消息，触发 inbox async。
-8. 运行 `uv_run(UV_RUN_DEFAULT)`。
+4. 加载并初始化 `lservice3`，调用 `service.input(addr, config_ptr_or_nil)` 绑定当前 VM；Lua 只借用 config 解包。
+5. 加载 source，执行时仍传入 `(addr, config_ptr_or_nil)`；source 中显式重复调用同一 addr 的 `input` 是幂等的。
+6. source 返回 function 直接作为 handler，table 通过 `service.dispatch` 转换为 handler；source 初始化返回后由 native 释放 config buffer。
+7. 如果 stop 尚未请求，发布 RUNNING 并 signal condition。
+8. 如果 mailbox 已有预入队消息，触发 inbox async。
+9. 运行 `uv_run(UV_RUN_DEFAULT)`。
 
 任一步失败都保存包含阶段和 Lua/libuv 根因的错误，关闭已初始化资源，进入 STOPPED 并 signal condition。
 
