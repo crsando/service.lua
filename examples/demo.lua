@@ -1,15 +1,11 @@
+-- Run from the repository root:
+--   LUA_PATH='./lua/?.lua;;' LUA_CPATH='./build/?.so;;' luajit examples/demo.lua
 local service = require "service"
 
---[[
-local root_addr = service.new { source = "@service/root.lua", config = { accounts = accounts } }
-
-service.start(root_addr)
-service.send(service.get_id(root_id), "boot")
-service.join(root_addr)
-]]
-
+-- Create root, send it "boot", and join it. root must call service.quit()
+-- itself; bootstrap returns once the root pthread has exited.
 service.bootstrap {
     source = "@service/root.lua",
-    config = {},
-    start = "boot"
+    config = { greeting = "hello" },
+    start = "boot",
 }

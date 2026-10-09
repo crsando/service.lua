@@ -1,6 +1,9 @@
+# Build output (make writes everything under build/)
+/build/
 *.o
 *.so
-build/
+
+# Local secrets
 .env
 secrets.lua
 accounts.local.lua

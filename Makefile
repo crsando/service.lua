@@ -1,110 +1,111 @@
-CFLAGS?=-g -Wall
-# CFLAGS+=-DDEBUGLOG
-CONTRACT_CFLAGS?=-std=c11 -Wall -Wextra -Wpedantic
-TSAN_CFLAGS?=-std=c11 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=thread -fno-pie -no-pie
+# service.lua
+#
+#   make                  build $(BUILD)/service_c.so
+#   make test             run the default test suite
+#   make test-tsan        run C tests under ThreadSanitizer
+#   make install          install to $(DESTDIR)$(PREFIX)
+#   make clean            remove $(BUILD)
 
-PREFIX?=/usr/local
-BUILD_DIR?=build
+PREFIX  ?= /usr/local
+DESTDIR ?=
+BUILD   ?= build
 
-LUAINC?=-I/usr/local/include/luajit-2.1
-SHARED=--shared -fPIC
-SO=so
-LIBS=-lpthread -lluajit-5.1 -luv -ldl
+CFLAGS  ?= -O2 -g -Wall
+LUAINC  ?= $(shell pkg-config --cflags luajit 2>/dev/null || echo -I/usr/local/include/luajit-2.1)
+LIBS    := -lluajit-5.1 -luv -lpthread -ldl
 
-LUA_ENV=env 'LUA_PATH=./lua/?.lua;;' 'LUA_CPATH=./?.so;;'
-CONTRACT_ABI_TEST=$(BUILD_DIR)/message_abi_test
-SERI_MODULE=$(BUILD_DIR)/seri.so
-MAILBOX_TEST=$(BUILD_DIR)/mailbox_test
-MAILBOX_TSAN_TEST=$(BUILD_DIR)/mailbox_test_tsan
-SERVICE_TEST=$(BUILD_DIR)/service_lifecycle_test
-SERVICE_TSAN_TEST=$(BUILD_DIR)/service_lifecycle_test_tsan
-SERVICE_TEST_SRCS=tests/c/service_lifecycle_test.c src/service.c src/loadluv.c src/mailbox.c \
- src/message.c src/log.c
+TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic
+TSAN_CFLAGS := $(TEST_CFLAGS) -O1 -g -fsanitize=thread -fno-pie -no-pie
+LUA_ENV     := env LUA_PATH='./lua/?.lua;;' LUA_CPATH='./$(BUILD)/?.so;;'
+RUN         := timeout 10s $(LUA_ENV) luajit
 
-SRCS=\
- src/lservice.c \
- src/service.c \
- src/loadluv.c \
- src/mailbox.c \
- src/message.c \
- src/lua-seri.c \
- src/log.c
+MODULE := $(BUILD)/service_c.so
+SRCS   := src/lservice.c src/service.c src/loadluv.c src/mailbox.c \
+          src/message.c src/lua-seri.c src/log.c
+HDRS   := $(wildcard src/*.h)
 
-.PHONY: all test test-contract test-mailbox test-service test-scheduler test-tsan test-regression install clean
+MAILBOX_SRCS := tests/c/mailbox_test.c src/mailbox.c src/message.c
+SERVICE_SRCS := tests/c/service_lifecycle_test.c src/service.c src/loadluv.c \
+                src/mailbox.c src/message.c src/log.c
+SERVICE_DEFS := -D_POSIX_C_SOURCE=200809L -DLUV_LOADER_TESTING
 
-all: service_c.so
+LUA_SPECS := serializer_spec serializer_shared_ref_spec lifecycle_spec \
+             mailbox_spec rpc_spec rpc_cross_service_spec dispatch_batch_spec \
+             table_source_spec scheduler_spec scheduler_daily_spec
 
-service_c.so: $(SRCS)
-	$(CC) $(CFLAGS) $(SHARED) $(LUAINC) -Isrc -o $@ $^ $(LIBS)
+.PHONY: all test test-contract test-mailbox test-service test-lua \
+        test-scheduler test-examples test-regression test-tsan install clean
 
-test: test-contract test-mailbox test-service
-	$(LUA_ENV) luajit tests/lua/serializer_spec.lua
-	$(LUA_ENV) luajit tests/lua/serializer_shared_ref_spec.lua
-	timeout 10s $(LUA_ENV) luajit tests/lua/lifecycle_spec.lua
-	timeout 10s $(LUA_ENV) luajit tests/lua/mailbox_spec.lua
-	timeout 10s $(LUA_ENV) luajit tests/lua/rpc_spec.lua
-	timeout 10s $(LUA_ENV) luajit tests/lua/rpc_cross_service_spec.lua
-	timeout 10s $(LUA_ENV) luajit tests/lua/dispatch_batch_spec.lua
-	timeout 10s $(LUA_ENV) luajit tests/lua/table_source_spec.lua
-	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_spec.lua
+all: $(MODULE)
 
-$(CONTRACT_ABI_TEST): tests/contract/message_abi_test.c src/message.h
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CONTRACT_CFLAGS) -Isrc -o $@ $<
+$(BUILD):
+	mkdir -p $@
 
-$(SERI_MODULE): src/lua-seri.c
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DTEST_SERI $(SHARED) $(LUAINC) -Isrc -o $@ $< -lluajit-5.1
+$(MODULE): $(SRCS) $(HDRS) | $(BUILD)
+	$(CC) $(CFLAGS) -shared -fPIC $(LUAINC) -Isrc -o $@ $(SRCS) $(LIBS)
 
-test-contract: service_c.so $(CONTRACT_ABI_TEST) $(SERI_MODULE)
+# Standalone serializer module used by the contract test.
+$(BUILD)/seri.so: src/lua-seri.c src/lua-seri.h | $(BUILD)
+	$(CC) $(CFLAGS) -DTEST_SERI -shared -fPIC $(LUAINC) -Isrc -o $@ $< -lluajit-5.1
+
+$(BUILD)/message_abi_test: tests/contract/message_abi_test.c src/message.h | $(BUILD)
+	$(CC) $(TEST_CFLAGS) -Isrc -o $@ $<
+
+$(BUILD)/mailbox_test: $(MAILBOX_SRCS) $(HDRS) | $(BUILD)
+	$(CC) $(TEST_CFLAGS) -Isrc -o $@ $(MAILBOX_SRCS) -lpthread
+
+$(BUILD)/service_lifecycle_test: $(SERVICE_SRCS) $(HDRS) | $(BUILD)
+	$(CC) $(TEST_CFLAGS) $(SERVICE_DEFS) $(LUAINC) -Isrc -o $@ $(SERVICE_SRCS) $(LIBS)
+
+$(BUILD)/mailbox_test_tsan: $(MAILBOX_SRCS) $(HDRS) | $(BUILD)
+	$(CC) $(TSAN_CFLAGS) -Isrc -o $@ $(MAILBOX_SRCS) -lpthread
+
+$(BUILD)/service_lifecycle_test_tsan: $(SERVICE_SRCS) $(HDRS) | $(BUILD)
+	$(CC) $(TSAN_CFLAGS) $(SERVICE_DEFS) $(LUAINC) -Isrc -o $@ $(SERVICE_SRCS) $(LIBS)
+
+test: test-contract test-mailbox test-service test-lua test-examples
+
+test-contract: $(MODULE) $(BUILD)/seri.so $(BUILD)/message_abi_test
 	$(LUA_ENV) luajit tests/contract/api_surface_spec.lua
-	env 'LUA_CPATH=./$(BUILD_DIR)/?.so;;' luajit tests/contract/serializer_module_spec.lua
-	$(CONTRACT_ABI_TEST)
+	$(LUA_ENV) luajit tests/contract/serializer_module_spec.lua
+	$(BUILD)/message_abi_test
 
-$(MAILBOX_TEST): tests/c/mailbox_test.c src/mailbox.c src/mailbox.h src/message.c src/message.h
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CONTRACT_CFLAGS) -Isrc -o $@ tests/c/mailbox_test.c src/mailbox.c src/message.c -lpthread
+test-mailbox: $(BUILD)/mailbox_test
+	$<
 
-test-mailbox: $(MAILBOX_TEST)
-	$(MAILBOX_TEST)
+test-service: $(MODULE) $(BUILD)/service_lifecycle_test
+	$(LUA_ENV) $(BUILD)/service_lifecycle_test
 
-$(SERVICE_TEST): $(SERVICE_TEST_SRCS) src/service.h src/loadluv.h
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CONTRACT_CFLAGS) -D_POSIX_C_SOURCE=200809L -DLUV_LOADER_TESTING \
-		$(LUAINC) -Isrc \
-		-o $@ $(SERVICE_TEST_SRCS) $(LIBS)
+test-lua: $(MODULE)
+	@set -e; for spec in $(LUA_SPECS); do \
+		echo "$(RUN) tests/lua/$$spec.lua"; \
+		$(RUN) tests/lua/$$spec.lua; \
+	done
 
-test-service: $(SERVICE_TEST)
-	$(LUA_ENV) $(SERVICE_TEST)
+test-scheduler: $(MODULE)
+	$(RUN) tests/lua/scheduler_spec.lua
+	$(RUN) tests/lua/scheduler_daily_spec.lua
 
-test-scheduler: service_c.so
-	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_spec.lua
-	timeout 10s $(LUA_ENV) luajit tests/lua/scheduler_daily_spec.lua
+# Each example must exit on its own and print its final line.
+test-examples: $(MODULE)
+	$(RUN) examples/demo.lua > $(BUILD)/demo.out
+	grep -qx 'root: done' $(BUILD)/demo.out
+	$(RUN) examples/scheduler.lua > $(BUILD)/scheduler.out
+	grep -q '^at(UTC): fired' $(BUILD)/scheduler.out
 
-$(MAILBOX_TSAN_TEST): tests/c/mailbox_test.c src/mailbox.c src/mailbox.h src/message.c src/message.h
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(TSAN_CFLAGS) -Isrc -o $@ tests/c/mailbox_test.c src/mailbox.c src/message.c -lpthread
+test-regression: $(MODULE)
+	$(RUN) tests/lua/serializer_shared_ref_spec.lua
 
-$(SERVICE_TSAN_TEST): $(SERVICE_TEST_SRCS) src/service.h src/loadluv.h
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(TSAN_CFLAGS) -D_POSIX_C_SOURCE=200809L -DLUV_LOADER_TESTING \
-		$(LUAINC) -Isrc \
-		-o $@ $(SERVICE_TEST_SRCS) $(LIBS)
+test-tsan: $(MODULE) $(BUILD)/mailbox_test_tsan $(BUILD)/service_lifecycle_test_tsan
+	setarch $$(uname -m) -R env TSAN_OPTIONS=halt_on_error=1 $(BUILD)/mailbox_test_tsan
+	$(LUA_ENV) setarch $$(uname -m) -R env TSAN_OPTIONS=halt_on_error=1 \
+		$(BUILD)/service_lifecycle_test_tsan
 
-test-tsan: $(MAILBOX_TSAN_TEST) $(SERVICE_TSAN_TEST)
-	setarch $(shell uname -m) -R env TSAN_OPTIONS=halt_on_error=1 $(MAILBOX_TSAN_TEST)
-	$(LUA_ENV) setarch $(shell uname -m) -R env TSAN_OPTIONS=halt_on_error=1 $(SERVICE_TSAN_TEST)
-
-test-regression: service_c.so
-	$(LUA_ENV) luajit tests/lua/serializer_shared_ref_spec.lua
-
-install: service_c.so
-	cp service_c.so $(PREFIX)/lib/lua/5.1/
-	cp lua/service.lua $(PREFIX)/share/lua/5.1/
-	mkdir -p $(PREFIX)/share/lua/5.1/service
-	cp lua/service/scheduler.lua $(PREFIX)/share/lua/5.1/service/
+install: $(MODULE)
+	install -d $(DESTDIR)$(PREFIX)/lib/lua/5.1 $(DESTDIR)$(PREFIX)/share/lua/5.1/service
+	install -m 755 $(MODULE) $(DESTDIR)$(PREFIX)/lib/lua/5.1/
+	install -m 644 lua/service.lua $(DESTDIR)$(PREFIX)/share/lua/5.1/
+	install -m 644 lua/service/scheduler.lua $(DESTDIR)$(PREFIX)/share/lua/5.1/service/
 
 clean:
-	rm -f service_c.$(SO) $(CONTRACT_ABI_TEST) $(SERI_MODULE) $(MAILBOX_TEST) \
-		$(MAILBOX_TSAN_TEST) $(SERVICE_TEST) $(SERVICE_TSAN_TEST)
-	rmdir $(BUILD_DIR) 2>/dev/null || true
+	rm -rf $(BUILD)
