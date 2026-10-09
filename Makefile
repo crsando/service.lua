@@ -96,10 +96,13 @@ test-examples: $(MODULE)
 test-regression: $(MODULE)
 	$(RUN) tests/lua/serializer_shared_ref_spec.lua
 
+# libuv's io_uring setup (fd + mmap in uninstrumented code) makes TSAN report
+# false races between concurrent uv_loop_init calls, so disable it here.
+TSAN_ENV := env TSAN_OPTIONS=halt_on_error=1 UV_USE_IO_URING=0
+
 test-tsan: $(MODULE) $(BUILD)/mailbox_test_tsan $(BUILD)/service_lifecycle_test_tsan
-	setarch $$(uname -m) -R env TSAN_OPTIONS=halt_on_error=1 $(BUILD)/mailbox_test_tsan
-	$(LUA_ENV) setarch $$(uname -m) -R env TSAN_OPTIONS=halt_on_error=1 \
-		$(BUILD)/service_lifecycle_test_tsan
+	setarch $$(uname -m) -R $(TSAN_ENV) $(BUILD)/mailbox_test_tsan
+	$(LUA_ENV) setarch $$(uname -m) -R $(TSAN_ENV) $(BUILD)/service_lifecycle_test_tsan
 
 install: $(MODULE)
 	install -d $(DESTDIR)$(PREFIX)/lib/lua/5.1 $(DESTDIR)$(PREFIX)/share/lua/5.1/service
