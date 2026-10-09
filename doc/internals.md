@@ -105,7 +105,11 @@ NEW ─start─▶ STARTING ─init ok─▶ RUNNING ─stop─▶ STOPPING ─t
 
 **join**：`pthread_join` 之后状态切换到 JOINED。随后执行 `service_free`：等待 pin 归零，释放邮箱、source 和 config，状态切换到 FREED。并发调用 join 时，后来者等待第一个 join 完成，然后返回它的结果。
 
-**pool 删除**：C 层有 `service_pool_delete`，会 stop 并 join 所有 service 后释放 pool。但目前 Lua 层没有暴露这个函数，`bootstrap` 也不会调用它。
+**退出原因**：`service_t.exit_error` 记录 service 为什么停止，只保留第一次写入的值。写入来源有两个：`service.quit(err)`（通过 `_stop` 的第二个参数），以及 `service_async_cb` 中 dispatcher 的 `lua_pcall` 失败。这个字段在 join 之后仍保留在墓碑中，pool 删除时才释放。
+
+**bootstrap 入口**：入口命令以 `MESSAGE_SYSTEM` 发送，payload 为 `("bootstrap", entry)`。dispatcher 为它创建一个由运行时管理的 coroutine（session 为 0），用 `pcall` 执行 `request(entry)`。LuaJIT 允许在 `pcall` 内部 yield，所以入口中可以正常 `call` 和 `sleep`。如果出错，就记录日志并执行 `service.quit(message)`。
+
+**pool 删除**：`service_pool_delete` 先对所有 service 执行 stop，再逐个 join，然后释放所有 `service_t` 和 pool 本身。Lua 侧通过 `_pool_delete` 调用它，`bootstrap` 在 root 退出后使用。
 
 **限制**：
 
@@ -133,4 +137,4 @@ NEW ─start─▶ STARTING ─init ok─▶ RUNNING ─stop─▶ STOPPING ─t
 3. `send` 返回成功意味着目标邮箱已持有这条消息；返回失败意味着这条消息永远不会被处理。
 4. 运行时生成的 addr 和 ID 在 pool 存续期间不会指向另一个 service。
 5. `service_free` 必须在 `send_pins == 0` 之后才释放邮箱。
-6. 未知名字绝不能解析为 root（ID 0）。目前 `lookup(nil)` 是一个例外，见[已知问题](known-issues.md)。
+6. 未知名字或非字符串名字绝不能解析为 root（ID 0）。

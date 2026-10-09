@@ -33,6 +33,8 @@ assert(ok == nil and err == "SERVICE_STOPPED")
 ok, err = service.send(99, "invalid")
 assert(ok == nil and err == "SERVICE_NOT_FOUND")
 assert(service.lookup("root") == nil)
+assert(service.lookup(nil) == nil, "lookup(nil) must not resolve to root")
+assert(service.lookup(0) == nil)
 
 local bad = service.new {
     source = "error('expected init failure')",

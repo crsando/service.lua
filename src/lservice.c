@@ -74,9 +74,19 @@ static int lservice_start(lua_State *L) {
     return 1;
 }
 
+static int lservice_pool_delete(lua_State *L) {
+    luaL_checktype(L, 1, LUA_TLIGHTUSERDATA);
+    service_pool_delete(lua_touserdata(L, 1));
+    return 0;
+}
+
 static int lservice_stop(lua_State *L) {
     service_t * s = lua_touserdata(L, 1);
-    int ret = service_stop(s);
+    const char *exit_error = luaL_optstring(L, 2, NULL);
+    int ret;
+
+    service_set_exit_error(s, exit_error);
+    ret = service_stop(s);
     if (ret != 0)
         return luaL_error(L, "could not stop service: %d", ret);
     lua_pushinteger(L, ret);
@@ -89,6 +99,15 @@ static int lservice_join(lua_State *L) {
     if (ret != 0)
         return luaL_error(L, "could not join service: %d", ret);
     lua_pushinteger(L, ret);
+    return 1;
+}
+
+static int lservice_get_exit_error(lua_State *L) {
+    service_t * s = lua_touserdata(L, 1);
+    const char *message = service_get_exit_error(s);
+    if (message == NULL)
+        return 0;
+    lua_pushstring(L, message);
     return 1;
 }
 
@@ -266,6 +285,7 @@ LUAMOD_API int luaopen_service_c(lua_State *L) {
 	luaL_Reg l[] = {
         // pool
 		{ "_pool_new", lservice_pool_new },
+		{ "_pool_delete", lservice_pool_delete },
 		{ "_lookup", lservice_lookup },
 		{ "_get_pool", lservice_get_pool },
 		{ "_get_async", lservice_get_async },
@@ -277,6 +297,7 @@ LUAMOD_API int luaopen_service_c(lua_State *L) {
 		{ "_start", lservice_start },
 		{ "_stop", lservice_stop },
 		{ "_join", lservice_join },
+		{ "_get_exit_error", lservice_get_exit_error },
 		{ "_get_id", lservice_get_id },
 		{ "_send_message", lservice_send_message },
 		{ "_recv_message", lservice_recv_message },

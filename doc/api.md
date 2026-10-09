@@ -55,9 +55,9 @@ service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 会�
 
 `new` + `start` + `get_id`。
 
-### `service.quit()`
+### `service.quit(err?)`
 
-请求停止**当前** service，幂等。详细语义见[使用指南 §7](guide.md#7-关闭)。
+请求停止**当前** service，幂等。传入 `err` 表示异常退出：它会被转成字符串，记为该 service 的退出原因，`bootstrap` 会把这个原因作为错误返回。只有第一次记录的原因有效。详细语义见[使用指南 §7](guide.md#7-关闭)。
 
 ### `service.join(addr_or_id) -> 0`
 
@@ -67,11 +67,30 @@ service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 会�
 - join 自己会抛错（`EDEADLK`）；重复 join 返回第一次的结果。
 - 在 standalone 中只能传 addr，因为 ID 到 addr 的转换需要 service 上下文。
 
-### `service.bootstrap { source, config?, start? }`
+### `service.bootstrap { source, config?, start? } -> true | nil, err`
 
-以 `name = "root"` 执行 `new`，然后依次执行 `start`、`send(id, start or "boot")`、`join`。
+只能在宿主线程中调用。执行过程如下：
 
-当前**没有返回值**（不要写 `assert(service.bootstrap{...})`），也不会停止或 join 子 service。
+1. 新建一个专用 pool，在其中以 `name = "root"` 创建并启动 root；
+2. 用一条内部 `MESSAGE_SYSTEM` 消息让 root 执行 `start` 命令（缺省为 `"boot"`）；
+3. join root；
+4. 调用 `_pool_delete`，停止、join 并释放这个 pool 中的所有 service；
+5. 如果 `service.pool` 指向这个已删除的 pool，就把它重置为 nil。
+
+返回值：
+
+| 情况 | 返回 |
+| --- | --- |
+| root 调用 `service.quit()` | `true` |
+| root 调用 `service.quit(err)` | `nil, err` |
+| 入口命令抛错 | `nil, <错误字符串>`。运行时会先记录日志，再让 root 以该错误退出 |
+| 入口命令不存在（table handler） | `nil, "command not found"` |
+| root 的分发循环出错（例如 `on_idle` 抛错） | `nil, <错误字符串>` |
+| root 启动失败 | `nil, "SERVICE_START_FAILED: <errno>"` |
+
+参数不合法（缺少 `source`、`start` 不是字符串）或者在 service 中调用时会抛错。
+
+限制：停止是协作式的。如果某个 service 的 handler 永不 yield，`bootstrap` 会一直阻塞。
 
 ## 4. 查询
 
@@ -79,7 +98,7 @@ service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 会�
 | --- | --- | --- |
 | `service.get_id(addr?)` | integer | 不传参数时返回当前 ID。standalone 中恒为 0 |
 | `service.get_addr(id_or_addr?)` | addr \| `nil, "SERVICE_NOT_FOUND"` | 不传参数时返回 `self`；传入非数字参数时原样返回。数字参数需要 service 上下文，已停止的 service 仍可查到（用于 join 或诊断） |
-| `service.lookup(name)` | id \| nil | 只匹配存活的 service。注意 `lookup(nil)` 当前返回 0 |
+| `service.lookup(name)` | id \| nil | 只匹配存活的 service。参数不是字符串时返回 nil |
 | `service.get_pool(addr?)` | pool | |
 | `service.get_async(addr?)` | lightuserdata \| nil | 目标的 inbox `uv_async_t*`，用于[外部线程接入](guide.md#外部线程接入) |
 | `service.get_uv_loop(addr?)` | lightuserdata \| nil | 目标的 `uv_loop_t*`，仅用于诊断 |
@@ -177,8 +196,11 @@ handler 中的错误只影响当前请求。`on_idle` 中的错误，或者分�
 | 函数 | 参数 | 返回 |
 | --- | --- | --- |
 | `_pool_new` | `()` | pool |
+| `_pool_delete` | `(pool)` | 无返回值。停止、join 并释放 pool 中的所有 service，然后释放 pool 本身。之后该 pool 中的所有 addr 都失效 |
 | `_new` | `(pool, name?, source, config_ptr?, options?)` | addr，失败时抛错 |
-| `_start` / `_stop` / `_join` | `(addr)` | 0，失败时抛错 |
+| `_start` / `_join` | `(addr)` | 0，失败时抛错 |
+| `_stop` | `(addr, exit_error?)` | 0。传入 `exit_error` 时记录退出原因（只有第一次有效） |
+| `_get_exit_error` | `(addr)` | 退出原因字符串，或 nil。join 之后仍可读取，直到 pool 被删除 |
 | `_get_id` | `(addr)` | id |
 | `_get_pool` / `_get_async` / `_get_uv_loop` | `(addr)` | 指针或 nil |
 | `_get_addr` | `(addr, id)` | addr 或 `nil, "SERVICE_NOT_FOUND"` |
@@ -194,7 +216,7 @@ handler 中的错误只影响当前请求。`on_idle` 中的错误，或者分�
 
 | 值 | 类型 | 用途 |
 | --- | --- | --- |
-| 0 | `MESSAGE_SYSTEM` | 保留，目前直接丢弃 |
+| 0 | `MESSAGE_SYSTEM` | 运行时内部使用。目前只处理 payload 为 `("bootstrap", entry)` 的消息，其他直接丢弃 |
 | 1 | `MESSAGE_REQUEST` | session 为 0 表示 `send`；session > 0 表示 `call` |
 | 2 | `MESSAGE_RESPONSE` | `call` 成功时的响应 |
 | 3 | `MESSAGE_ERROR` | `call` 失败时的响应，payload 是一个错误字符串 |

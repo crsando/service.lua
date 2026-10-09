@@ -42,19 +42,6 @@ quit 之后，等待中的 `call` 和 `sleep` 永远不会被恢复。其他 ser
 
 **方向**：提供 `local token = service.suspend()` 和 `service.wakeup(token, ...)`。token 只能使用一次，并且只允许在非 handler 上下文中唤醒。`sleep` 和 `call` 都应检查上下文并给出明确的错误信息。
 
-### RT-6（P2）`bootstrap` 契约不完整
-
-- 没有返回值；
-- 只 join root，不会停止或 join 子 service；
-- 没有暴露 `service_pool_delete`，pool 和墓碑资源要等进程退出才回收；
-- root 的入口 handler 抛错时只记录日志，root 不会 quit，宿主线程因此永久阻塞。
-
-**方向**：成功时返回 `true`。root 退出后，对其余 service 执行 stop，并在宽限期内 join，然后删除 pool。入口命令改用 `call` 发送：入口 handler 失败时，停止 root 并返回 `nil, err`。
-
-### RT-7（P2）`lookup(nil)` 返回 0
-
-这是对旧行为的兼容残留。结果是无效的名字会被解析为 root。应改为返回 nil，或者直接抛错。
-
 ### RT-8（P2）每个 pool 最多 32 个 service，ID 不复用
 
 对长期运行、需要动态创建 worker 的程序不够用。
@@ -93,7 +80,9 @@ standalone 中 `get_id()` 返回 0，与 root 的 ID 相同。由于宿主线程
 ## 6. 建议的推进顺序
 
 1. SEC-1 的凭据轮换（外部动作，不依赖代码）。
-2. RT-6：完整的 bootstrap 关闭流程。RT-2：停止时回复 ERROR。这两项解决最常见的“程序退不出”和“调用方挂起”问题。
-3. RT-1：调用方超时。
+2. RT-1：调用方超时。
+3. RT-2：停止时回复 ERROR，解决“调用方挂起”的问题。
 4. RT-3、RT-4、RT-5：把外部线程接入、多个 idle 回调、挂起和唤醒做成正式 API。CTP 这类集成目前依赖的正是这些底层接口。
-5. RT-7、RT-9 及工程类条目。
+5. RT-9 及工程类条目。
+
+已完成：RT-6（bootstrap 返回结果并回收整个 pool）、RT-7（`lookup` 不再把非字符串名字解析为 root）。

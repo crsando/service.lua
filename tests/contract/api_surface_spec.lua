@@ -42,6 +42,7 @@ assert_functions(service, {
 
 assert_functions(native, {
     "_pool_new",
+    "_pool_delete",
     "_lookup",
     "_get_pool",
     "_get_async",
@@ -51,6 +52,7 @@ assert_functions(native, {
     "_start",
     "_stop",
     "_join",
+    "_get_exit_error",
     "_get_id",
     "_send_message",
     "_recv_message",

@@ -31,8 +31,8 @@ return service.dispatch(function(command)
 end)
 ]]
 
-service.bootstrap {
+assert(service.bootstrap {
     source = source,
     config = {},
     start = "boot",
-}
+})

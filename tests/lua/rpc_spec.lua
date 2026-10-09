@@ -161,10 +161,10 @@ end
 return service.dispatch(S)
 ]]
 
-service.bootstrap {
+assert(service.bootstrap {
     source = source,
     config = {},
     start = "boot",
-}
+})
 
 print("rpc_spec: ok")

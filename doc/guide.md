@@ -66,14 +66,32 @@ handler 的全部返回值（包括中间和末尾的 nil）都会原样回到 `
 -- main.lua
 local service = require "service"
 
-service.bootstrap {
+local ok, err = service.bootstrap {
     source = "@service/root.lua",
     config = { greeting = "hello" },
     start = "boot",            -- 缺省为 "boot"
 }
+if not ok then
+    io.stderr:write("root failed: ", err, "\n")
+    os.exit(1)
+end
 ```
 
-`bootstrap` 依次执行以下步骤：以名字 `root` 创建 ID 为 0 的 service；启动它；向它 `send` 一条 `start` 命令；然后 `join` 它。等价的手写形式是：
+`bootstrap` 的执行过程：
+
+1. 新建一个 pool，以名字 `root` 创建并启动 ID 为 0 的 service；
+2. 让 root 执行 `start` 命令；
+3. 等待 root 退出；
+4. 停止、join 并释放 pool 中剩余的所有 service。
+
+返回值：
+
+- root 正常调用 `service.quit()` 时，返回 `true`；
+- 启动失败、入口命令抛错或不存在、root 调用了 `service.quit(err)`、root 的分发循环出错（例如 `on_idle` 抛错）时，返回 `nil, err`。
+
+入口命令执行成功后，root 会继续运行，直到它调用 `service.quit()` 为止。
+
+也可以手动控制启动过程：
 
 ```lua
 local root = service.new { source = "@service/root.lua", config = {} }
@@ -82,7 +100,7 @@ service.send(service.get_id(root), "boot")
 service.join(root)
 ```
 
-`join` 只等待，不会让 root 停止。root 必须自己调用 `service.quit()`，否则入口会一直阻塞。
+注意，手动方式中入口命令只是普通的 `send`：入口抛错时只记录日志，root 不会退出。另外 `join` 只等待，不会回收子 service。如果没有特殊需要，优先使用 `bootstrap`。
 
 ## 4. 组织子 service
 
@@ -158,14 +176,15 @@ function S.shutdown()
 end
 ```
 
-`service.quit()` 的语义：
+`service.quit(err?)` 的语义：
 
 - 幂等，并且只是**请求**停止。当前 coroutine 会继续运行，直到它返回或挂起。
 - 调用后，service 不再处理邮箱中的新消息。按 ID 发来的新 `send` 和 `call` 会收到 stopping 或 stopped 错误，按名字发来的会收到 not found。
 - 邮箱里尚未处理的消息会被丢弃。挂起中的 coroutine（正在 `call` 或 `sleep` 的）不会再被恢复。
 - 所有 luv handle（timer、socket 等）都由运行时关闭，不需要手动清理。
+- 传入 `err` 表示异常退出。root 以 `quit(err)` 退出时，`bootstrap` 返回 `nil, err`。
 
-如果只用 `send` 发出 quit，root 可能先于子 service 退出。当前 `bootstrap` 只 join root，没有退出的子 service 会在进程结束时随进程一起终止。如果子 service 需要完成清理，就用 `call` 等待它确认。
+root 退出后，`bootstrap` 会停止并 join 剩下的所有 service，所以即使子 service 没有主动 quit，程序也能正常结束。不过，由运行时强制停止的 service 不会执行自己的 quit 命令。需要做清理（例如断开连接、写盘）的子 service，应由 root 用 `call` 发送 quit 命令，并等它确认。
 
 ## 8. 常用模式
 
@@ -246,11 +265,11 @@ end
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 入口一直不退出 | root 没有调用 `service.quit()`，或 boot 中途抛错 | 保证所有路径都会 quit。boot 抛错时运行时只记录日志 |
+| 入口一直不退出 | 入口命令执行成功后，root 没有调用 `service.quit()`；或者某个 service 的 handler 陷入死循环、永不 yield | 保证 root 最终会 quit。入口命令抛错时，`bootstrap` 会让 root 退出 |
 | `service.call must be called from a managed service coroutine` | 在 luv 回调、`on_idle`、`set_timeout` 或宿主线程中调用了 call | 先 `send` 给自己，在 handler 中再 call |
 | 调用方永久挂起 | 目标在回复前 quit，或者 handler 自己挂起后再也没有被恢复 | 先返回结果再结束。call 目前没有超时 |
 | `Unsupport type function to serialize` | 参数或返回值中含有 Lua 函数、coroutine 或 userdata | 只传数据。lightuserdata 和无 upvalue 的 C 函数可以传 |
 | 状态在 call 之后变了 | 可重入：等待期间其他请求修改了状态 | 在 call 之后重新检查状态，或者用队列串行化 |
 | `cannot open file 'service/x.lua'` | `@` 路径相对于进程的当前目录 | 在正确目录启动，或者使用绝对路径 |
 | 第 33 个 service 创建失败 | 每个 pool 最多 32 个，ID 不复用 | 复用长期存活的 service |
-| 子 service 的清理代码没有执行 | root 先退出，进程随即结束 | 用 `call` 等子 service 确认 quit |
+| 子 service 的清理代码没有执行 | root 先退出，子 service 被 `bootstrap` 强制停止 | 用 `call` 等子 service 确认 quit |

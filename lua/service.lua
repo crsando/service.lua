@@ -16,6 +16,7 @@ local uv = require "luv"
 local UINT32_MAX = 4294967295
 local DISPATCH_BATCH_SIZE = 256
 
+local MESSAGE_SYSTEM = 0
 local MESSAGE_REQUEST = 1
 local MESSAGE_RESPONSE = 2
 local MESSAGE_ERROR = 3
@@ -111,7 +112,7 @@ function service.get_id(addr)
 end
 
 function service.lookup(name)
-    if not name then return 0 end
+    if type(name) ~= "string" then return nil end
     return service._lookup(service.get_pool(), name)
 end
 
@@ -336,10 +337,11 @@ function service.get_session()
 end
 
 local quit = false
-function service.quit()
+-- err marks an abnormal exit; bootstrap reports it for root.
+function service.quit(err)
     if quit then return end
     quit = true
-    service._stop(service.self)
+    service._stop(service.self, err ~= nil and error_message(err) or nil)
 end
 
 --
@@ -361,6 +363,27 @@ function service.dispatch(request_handler)
                 send_response(s(...))
             end
         end
+    end
+
+    -- bootstrap delivers the entry command as a SYSTEM message so that an
+    -- entry failure stops root with that error instead of leaving it running.
+    local function system(from, msg, sz)
+        local command, entry_point = service.unpack_remove(msg, sz)
+        if command ~= "bootstrap" then
+            return
+        end
+        local co = new_session(function ()
+            local ok, errobj = pcall(request, entry_point)
+            if not ok then
+                local co = running_thread
+                session_coroutine_address[co] = nil
+                session_coroutine_response[co] = nil
+                local message = error_message(errobj)
+                service._log_error(service.self, message)
+                service.quit(message)
+            end
+        end, from, 0)
+        resume_session(co)
     end
 
     service._on_msg = function (msg)
@@ -391,6 +414,8 @@ function service.dispatch(request_handler)
                     session_coroutine_suspend_lookup[session] = nil
                     resume_session(co, type, session, msg, sz)
                 end
+            elseif type == MESSAGE_SYSTEM then
+                system(from, msg, sz)
             else
                 service.remove(msg, sz)
             end
@@ -407,16 +432,44 @@ function service.dispatch(request_handler)
     return service._on_msg
 end -- end service.dispatch
 
+-- Runs root in a fresh pool until it exits, then stops, joins and frees every
+-- service in that pool. Returns true, or nil and the reason root stopped.
 function service.bootstrap(entry)
-    assert(entry and type(entry) == "table")
+    assert(type(entry) == "table", "bootstrap entry must be a table")
     assert(type(entry.source) == "string", "entry.source must be a string")
+    assert(entry.start == nil or type(entry.start) == "string",
+        "entry.start must be a string")
+    assert(service.self == nil, "bootstrap must be called from the host thread")
 
-    local entry_point = entry.start or "boot"
+    local pool = service._pool_new()
+    local addr = service.new {
+        source = entry.source,
+        config = entry.config,
+        name = "root",
+        pool = pool,
+    }
 
-    local addr = service.new { source = entry.source, config = entry.config, name = "root" }
-    service.start(addr)
-    service.send(service.get_id(addr), entry_point)
-    service.join(addr)
+    local ok, err = pcall(service.start, addr)
+    if ok then
+        ok, err = service._send_message(pool, 0, service._get_id(addr), 0,
+            MESSAGE_SYSTEM, service.pack("bootstrap", entry.start or "boot"))
+        if not ok then
+            service._stop(addr, err)
+        end
+        service.join(addr)
+        err = service._get_exit_error(addr)
+        ok = err == nil
+    end
+
+    service._pool_delete(pool)
+    if service.pool == pool then
+        service.pool = nil
+    end
+
+    if not ok then
+        return nil, err
+    end
+    return true
 end
 
 --

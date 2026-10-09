@@ -29,8 +29,11 @@ service_async_cb(uv_async_t *handle) {
     lua_rawgeti(service->L, LUA_REGISTRYINDEX, service->func_ref);
     lua_pushliteral(service->L, "msg");
     if (lua_pcall(service->L, 1, 1, 0) != LUA_OK) {
-        log_error("service %u handler: %s", service->id,
-            lua_tostring(service->L, -1));
+        const char *message = lua_tostring(service->L, -1);
+
+        log_error("service %u handler: %s", service->id, message);
+        service_set_exit_error(service,
+            message != NULL ? message : "dispatcher error");
         handler_failed = true;
     } else if (lua_isboolean(service->L, -1)) {
         batch_full = lua_toboolean(service->L, -1);
@@ -107,6 +110,39 @@ service_get_state(service_t *service) {
     state = service->state;
     pthread_mutex_unlock(&service->state_lock);
     return state;
+}
+
+void
+service_set_exit_error(service_t *service, const char *message) {
+    char *copy;
+    size_t length;
+
+    if (service == NULL || message == NULL)
+        return;
+    length = strlen(message) + 1;
+    copy = malloc(length);
+    if (copy == NULL)
+        return;
+    memcpy(copy, message, length);
+    pthread_mutex_lock(&service->state_lock);
+    if (service->exit_error == NULL) {
+        service->exit_error = copy;
+        copy = NULL;
+    }
+    pthread_mutex_unlock(&service->state_lock);
+    free(copy);
+}
+
+const char *
+service_get_exit_error(service_t *service) {
+    const char *message;
+
+    if (service == NULL)
+        return NULL;
+    pthread_mutex_lock(&service->state_lock);
+    message = service->exit_error;
+    pthread_mutex_unlock(&service->state_lock);
+    return message;
 }
 
 uv_loop_t *
@@ -920,6 +956,7 @@ service_pool_delete(service_pool_t *pool) {
         service_t *service = pool->services[id];
         pthread_cond_destroy(&service->state_changed);
         pthread_mutex_destroy(&service->state_lock);
+        free(service->exit_error);
         free(service);
     }
     pthread_cond_destroy(&pool->pins_changed);

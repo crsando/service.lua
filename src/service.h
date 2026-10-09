@@ -62,6 +62,7 @@ struct service {
     bool thread_joined;
     int start_error;
     int join_error;
+    char *exit_error;          /* why the service stopped; NULL on a clean quit */
 
     pthread_t thread;
     char *source;
@@ -96,6 +97,10 @@ void service_unpin(service_t *service);
 service_send_result_t service_send(
     service_pool_t *pool, const message_t *message);
 bool service_recv(service_t *service, bool blocking, message_t *out);
+
+/* Records the first exit error; later calls keep the original reason. */
+void service_set_exit_error(service_t *service, const char *message);
+const char *service_get_exit_error(service_t *service);
 
 service_state_t service_get_state(service_t *service);
 uv_loop_t *service_get_loop(service_t *service);

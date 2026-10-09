@@ -2,10 +2,10 @@
 --   LUA_PATH='./lua/?.lua;;' LUA_CPATH='./build/?.so;;' luajit examples/demo.lua
 local service = require "service"
 
--- Create root, send it "boot", and join it. root must call service.quit()
--- itself; bootstrap returns once the root pthread has exited.
-service.bootstrap {
+-- Run root's "boot" command and wait until root calls service.quit(). Any
+-- service still running is then stopped. Returns nil, err if root failed.
+assert(service.bootstrap {
     source = "@service/root.lua",
     config = { greeting = "hello" },
     start = "boot",
-}
+})

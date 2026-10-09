@@ -82,4 +82,4 @@ doc/                       文档
 
 项目源自 `lservice3`，已严格改名为 `service`：`require "service"`、`require "service_c"`、`require "service.scheduler"`，原生入口是 `luaopen_service_c`。旧名字不提供兼容别名，已安装的 `lservice3*` 文件需要手动清理。
 
-当前实现已用于实际项目，但仍有若干待完善之处，例如 `bootstrap` 只 join root、`call` 没有超时、没有 pool 整体销毁等。详见[已知限制与路线](doc/known-issues.md)。
+当前实现已用于实际项目，但仍有若干待完善之处，例如 `call` 没有超时、service 停止时不会通知等待中的调用方等。详见[已知限制与路线](doc/known-issues.md)。
