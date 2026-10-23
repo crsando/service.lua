@@ -31,7 +31,7 @@ SERVICE_DEFS := -D_POSIX_C_SOURCE=200809L -DLUV_LOADER_TESTING
 
 LUA_SPECS := serializer_spec serializer_shared_ref_spec lifecycle_spec \
              mailbox_spec rpc_spec rpc_cross_service_spec dispatch_batch_spec \
-             table_source_spec bootstrap_spec scheduler_spec scheduler_daily_spec
+             table_source_spec bootstrap_spec root_spec scheduler_spec scheduler_daily_spec
 
 .PHONY: all test test-contract test-mailbox test-service test-lua \
         test-scheduler test-examples test-regression test-tsan install clean
@@ -108,7 +108,8 @@ install: $(MODULE)
 	install -d $(DESTDIR)$(PREFIX)/lib/lua/5.1 $(DESTDIR)$(PREFIX)/share/lua/5.1/service
 	install -m 755 $(MODULE) $(DESTDIR)$(PREFIX)/lib/lua/5.1/
 	install -m 644 lua/service.lua $(DESTDIR)$(PREFIX)/share/lua/5.1/
-	install -m 644 lua/service/scheduler.lua $(DESTDIR)$(PREFIX)/share/lua/5.1/service/
+	install -m 644 lua/service/scheduler.lua lua/service/root.lua \
+		$(DESTDIR)$(PREFIX)/share/lua/5.1/service/
 
 clean:
 	rm -rf $(BUILD)
