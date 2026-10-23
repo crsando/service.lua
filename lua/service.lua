@@ -368,12 +368,15 @@ function service.dispatch(request_handler)
     -- bootstrap delivers the entry command as a SYSTEM message so that an
     -- entry failure stops root with that error instead of leaving it running.
     local function system(from, msg, sz)
-        local command, entry_point = service.unpack_remove(msg, sz)
-        if command ~= "bootstrap" then
+        local function pack_args(...)
+            return { n = select("#", ...), ... }
+        end
+        local args = pack_args(service.unpack_remove(msg, sz))
+        if args[1] ~= "bootstrap" then
             return
         end
         local co = new_session(function ()
-            local ok, errobj = pcall(request, entry_point)
+            local ok, errobj = pcall(request, unpack(args, 2, args.n))
             if not ok then
                 local co = running_thread
                 session_coroutine_address[co] = nil
@@ -439,8 +442,11 @@ function service.bootstrap(entry)
     assert(type(entry.source) == "string", "entry.source must be a string")
     assert(entry.start == nil or type(entry.start) == "string",
         "entry.start must be a string")
+    assert(entry.args == nil or type(entry.args) == "table",
+        "entry.args must be a table")
     assert(service.self == nil, "bootstrap must be called from the host thread")
 
+    local args = entry.args or {}
     local pool = service._pool_new()
     local addr = service.new {
         source = entry.source,
@@ -452,7 +458,8 @@ function service.bootstrap(entry)
     local ok, err = pcall(service.start, addr)
     if ok then
         ok, err = service._send_message(pool, 0, service._get_id(addr), 0,
-            MESSAGE_SYSTEM, service.pack("bootstrap", entry.start or "boot"))
+            MESSAGE_SYSTEM, service.pack("bootstrap", entry.start or "boot",
+                unpack(args, 1, args.n or #args)))
         if not ok then
             service._stop(addr, err)
         end

@@ -36,6 +36,22 @@ return { go = function() service.quit() end }
 ]] }
 assert(ok == true, tostring(err))
 
+-- args are passed to the entry command, nil holes included.
+ok, err = service.bootstrap { args = { "a", nil, "c", n = 3 }, source = [[
+local service = require "service"
+return { boot = function(...)
+    local n = select("#", ...)
+    local a, b, c = ...
+    if n == 3 and a == "a" and b == nil and c == "c" then
+        service.quit()
+    else
+        service.quit("bad args: " .. n)
+    end
+end }
+]] }
+assert(ok == true, tostring(err))
+assert(not pcall(service.bootstrap, { source = "return {}", args = "x" }))
+
 -- Entry handler error: root stops with that error, children are reclaimed.
 ok, err = service.bootstrap { source = root [[
     service.spawn { name = "child", source = CHILD }
