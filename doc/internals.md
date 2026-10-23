@@ -107,7 +107,9 @@ NEW ─start─▶ STARTING ─init ok─▶ RUNNING ─stop─▶ STOPPING ─t
 
 **退出原因**：`service_t.exit_error` 记录 service 为什么停止，只保留第一次写入的值。写入来源有两个：`service.quit(err)`（通过 `_stop` 的第二个参数），以及 `service_async_cb` 中 dispatcher 的 `lua_pcall` 失败。这个字段在 join 之后仍保留在墓碑中，pool 删除时才释放。
 
-**bootstrap 入口**：入口命令以 `MESSAGE_SYSTEM` 发送，payload 为 `("bootstrap", entry)`。dispatcher 为它创建一个由运行时管理的 coroutine（session 为 0），用 `pcall` 执行 `request(entry)`。LuaJIT 允许在 `pcall` 内部 yield，所以入口中可以正常 `call` 和 `sleep`。如果出错，就记录日志并执行 `service.quit(message)`。
+**bootstrap 入口**：入口命令以 `MESSAGE_SYSTEM` 发送，payload 为 `("bootstrap", entry, ...)`。dispatcher 为它创建一个由运行时管理的 coroutine（session 为 0），用 `pcall` 执行 `request(entry, ...)`。LuaJIT 允许在 `pcall` 内部 yield，所以入口中可以正常 `call` 和 `sleep`。如果出错，就记录日志并执行 `service.quit(message)`。
+
+**`service.root` 的环境判断**：`lua/service/root.lua` 用 `service.self` 区分宿主和 service。这依赖 native 的启动顺序：执行 source 之前，已经调用过 `service.input(addr, config)`。调用者通过 `debug.getinfo` 查找：第 1 层是查找函数本身，第 2 层是模块主体，从第 3 层往上跳过 C 栈帧（即 `require`），第一个 Lua 栈帧就是调用者。LuaJIT 的尾调用不会保留栈帧，所以模块里写 `return require "service.root"` 时，调用者看起来是主脚本。这种情况最终会因为主脚本没有返回 handler 而启动失败。
 
 **pool 删除**：`service_pool_delete` 先对所有 service 执行 stop，再逐个 join，然后释放所有 `service_t` 和 pool 本身。Lua 侧通过 `_pool_delete` 调用它，`bootstrap` 在 root 退出后使用。
 

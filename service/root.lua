@@ -1,19 +1,19 @@
--- Root service: spawns the demo children, exercises send/call/sleep and
--- shuts everything down in order.
+-- Root service of the demo. Run it directly from the repository root:
 --
--- The runtime binds service.self/pool/config before this file runs, so no
--- service.input(...) call is needed. Returning a handler table is equivalent
--- to returning service.dispatch(S).
+--   LUA_PATH='./lua/?.lua;;' LUA_CPATH='./build/?.so;;' luajit service/root.lua [greeting]
+--
+-- require "service.root" starts this file as the root service and exits the
+-- process when root quits; everything below it only runs inside root.
 local service = require "service"
+local root = require "service.root"
 
-local S = {}
-
-function S.pong(from)
+function root.pong(from)
     print("root: pong from service " .. tostring(from))
 end
 
-function S.boot()
-    print("root: booting, greeting = " .. tostring(service.config.greeting))
+-- Entry point; receives the command line arguments.
+function root.boot(greeting)
+    print("root: booting, greeting = " .. tostring(greeting or "hello"))
 
     service.spawn { name = "echo", source = "@service/echo.lua" }
     service.spawn { name = "user", source = "@service/user.lua", config = { delay_ms = 100 } }
@@ -28,15 +28,15 @@ function S.boot()
     assert(service.send("user", "check", "fire-and-forget"))
 
     -- user sleeps and then calls back into root while root is still waiting
-    -- here; the root loop keeps serving S.pong meanwhile (re-entrant actor).
+    -- here; the root loop keeps serving root.pong meanwhile (re-entrant actor).
     print("root: user ping ->", service.call("user", "ping", service.get_id()))
 
     -- Shut down children first and wait for their acknowledgement, then stop
-    -- root. The host thread is joining root, so this ends the program.
+    -- root, which ends the program.
     assert(service.call("user", "quit"))
     assert(service.call("echo", "quit"))
     print("root: done")
     service.quit()
 end
 
-return S
+return root

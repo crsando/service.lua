@@ -60,7 +60,47 @@ handler 的全部返回值（包括中间和末尾的 nil）都会原样回到 `
 
 ## 3. 启动程序
 
-程序入口运行在宿主线程，通常只做一件事：启动 root 并等待它退出。
+### 3.1 直接运行 root 文件（推荐）
+
+root 文件的前两行固定为 `require "service"` 和 `require "service.root"`，入口写成 `root.boot`，文件结尾 `return root`：
+
+```lua
+-- services/root.lua
+local service = require "service"
+local root = require "service.root"
+
+function root.boot(env)                 -- 命令行参数依次传入
+    service.spawn { name = "db", source = "@services/db.lua" }
+    ...
+end
+
+function root.quit()                    -- 其他命令和普通 service 一样定义
+    service.quit()
+end
+
+return root
+```
+
+```sh
+luajit services/root.lua prod
+```
+
+`require "service.root"` 的行为取决于它在哪里执行：
+
+- **宿主线程**（`luajit services/root.lua` 时）：以当前文件为 source 调用 `bootstrap`，命令行参数 `arg[1..n]` 传给 `root.boot`。root 退出后，进程以 0 退出；失败时把原因写到 stderr，然后以 1 退出。这个 `require` **不会返回**，所以它之后的代码不会在宿主中执行。
+- **service 中**（root VM 再次执行这个文件时）：返回一张空的 handler 表。之后定义的函数都是命令，`return root` 交给运行时。
+
+注意事项：
+
+- 同一个文件会执行两次：宿主一次，root 一次。宿主只会执行到第 2 行，所以这两行之前不要放有副作用的代码。
+- 必须由被运行的脚本在**顶层**直接 require。在函数里 require、被其他模块 require、通过 `luajit -e` 运行，都会报错并以 1 退出。例外是在模块中写 `return require "service.root"`：这是尾调用，无法识别出来，但最终也会因为启动失败而以 1 退出。
+- 忘了写 `return root` 或者没有定义 `root.boot`，进程都会以 1 退出，stderr 中会给出原因。
+- `root.boot` 返回后 root **不会**自动退出，需要显式调用 `service.quit()`。`root.boot` 抛错时，root 带着这个错误退出。
+- 子 service 的文件也可以使用 `service.root`：在 service 中它只是一张普通的表，同时这个文件还可以直接运行，单独作为 root 调试。
+
+### 3.2 使用 `bootstrap`
+
+如果需要传 config、指定入口命令名，或者 source 不是一个文件，可以写一个单独的启动脚本：
 
 ```lua
 -- main.lua
@@ -70,6 +110,7 @@ local ok, err = service.bootstrap {
     source = "@service/root.lua",
     config = { greeting = "hello" },
     start = "boot",            -- 缺省为 "boot"
+    args = { "prod" },         -- 传给入口命令的参数
 }
 if not ok then
     io.stderr:write("root failed: ", err, "\n")
@@ -91,6 +132,8 @@ end
 
 入口命令执行成功后，root 会继续运行，直到它调用 `service.quit()` 为止。
 
+### 3.3 手动启动
+
 也可以手动控制启动过程：
 
 ```lua
@@ -100,7 +143,7 @@ service.send(service.get_id(root), "boot")
 service.join(root)
 ```
 
-注意，手动方式中入口命令只是普通的 `send`：入口抛错时只记录日志，root 不会退出。另外 `join` 只等待，不会回收子 service。如果没有特殊需要，优先使用 `bootstrap`。
+注意，手动方式中入口命令只是普通的 `send`：入口抛错时只记录日志，root 不会退出。另外 `join` 只等待，不会回收子 service。如果没有特殊需要，优先使用前两种方式。
 
 ## 4. 组织子 service
 
@@ -273,3 +316,5 @@ end
 | `cannot open file 'service/x.lua'` | `@` 路径相对于进程的当前目录 | 在正确目录启动，或者使用绝对路径 |
 | 第 33 个 service 创建失败 | 每个 pool 最多 32 个，ID 不复用 | 复用长期存活的 service |
 | 子 service 的清理代码没有执行 | root 先退出，子 service 被 `bootstrap` 强制停止 | 用 `call` 等子 service 确认 quit |
+| `service.root: must be required ...` | `service.root` 没有在被运行脚本的顶层 require | 放到 root 文件的第 2 行；工具脚本只 require `service` |
+| `service.root: SERVICE_START_FAILED` | root 文件没有 `return root`，或者 `@` 路径和当前目录不匹配 | 补上 `return root`；查看 stderr 中更早的 ERROR 日志 |

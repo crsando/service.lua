@@ -5,18 +5,17 @@
 每个 service 独占一个 pthread、一个 LuaJIT VM、一个 libuv loop 和一个有界邮箱。service 之间不共享 Lua 对象，只通过序列化后的消息通信。业务代码在 coroutine 里用同步写法完成 RPC 和等待。
 
 ```lua
+-- main.lua：直接运行 luajit main.lua
 local service = require "service"
+local root = require "service.root"     -- 把本文件作为 root service 启动
 
-local S = {}
-
-function S.boot()
+function root.boot(...)                 -- 入口，参数是命令行参数
     service.spawn { name = "echo", source = "@service/echo.lua" }
     print(service.call("echo", "echo", "hi", nil, 42))   --> hi  nil  42
-    assert(service.call("echo", "quit"))
-    service.quit()
+    service.quit()                      -- root 退出后进程以 0 退出
 end
 
-return S
+return root
 ```
 
 ## 特性
@@ -49,20 +48,21 @@ make clean          # 删除 build/
 示例需在仓库根目录运行，因为 `@service/...` 路径相对于当前工作目录：
 
 ```sh
-LUA_PATH='./lua/?.lua;;' LUA_CPATH='./build/?.so;;' luajit examples/demo.lua
+LUA_PATH='./lua/?.lua;;' LUA_CPATH='./build/?.so;;' luajit service/root.lua [greeting]
 LUA_PATH='./lua/?.lua;;' LUA_CPATH='./build/?.so;;' luajit examples/scheduler.lua
 ```
 
-`examples/demo.lua` 依次演示 spawn、多返回值 call、错误返回、send、sleep、可重入回调和有序关闭。运行时 stderr 会出现一条 `unknown command: nope` 的 ERROR 日志，这是示例有意触发的错误。
+`service/root.lua` 是 demo 的 root，可以直接运行。它依次演示 spawn、多返回值 call、错误返回、send、sleep、可重入回调和有序关闭。运行时 stderr 会出现一条 `unknown command: nope` 的 ERROR 日志，这是示例有意触发的错误。
 
 ## 目录
 
 ```text
 lua/service.lua            Lua 公共 API
+lua/service/root.lua       入口自举：让脚本直接作为 root 运行
 lua/service/scheduler.lua  可选调度器
 src/                       C 运行时（service、mailbox、luv 加载、序列化、日志）与 Lua 绑定
-service/                   示例 service：root、echo、user
-examples/                  入口示例：demo.lua、scheduler.lua
+service/                   demo：root（可直接运行）、echo、user
+examples/                  其他示例：scheduler.lua
 tests/                     contract、C 单元、Lua 集成测试
 doc/                       文档
 ```

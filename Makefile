@@ -88,7 +88,8 @@ test-scheduler: $(MODULE)
 
 # Each example must exit on its own and print its final line.
 test-examples: $(MODULE)
-	$(RUN) examples/demo.lua > $(BUILD)/demo.out
+	$(RUN) service/root.lua hi > $(BUILD)/demo.out
+	grep -qx 'root: booting, greeting = hi' $(BUILD)/demo.out
 	grep -qx 'root: done' $(BUILD)/demo.out
 	$(RUN) examples/scheduler.lua > $(BUILD)/scheduler.out
 	grep -q '^at(UTC): fired' $(BUILD)/scheduler.out

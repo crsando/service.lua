@@ -67,12 +67,25 @@ service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 会�
 - join 自己会抛错（`EDEADLK`）；重复 join 返回第一次的结果。
 - 在 standalone 中只能传 addr，因为 ID 到 addr 的转换需要 service 上下文。
 
-### `service.bootstrap { source, config?, start? } -> true | nil, err`
+### `require "service.root"`
+
+让被运行的脚本自己作为 root 启动。用法见[使用指南 §3.1](guide.md#31-直接运行-root-文件推荐)。
+
+- **service 中**（`service.self ~= nil`）：返回一张空表，作为该文件的 handler 表。
+- **宿主线程中**：
+  1. 沿调用栈找到 require 它的 Lua 栈帧。它必须是文件的顶层（`what == "main"`），source 以 `@` 开头；存在全局 `arg` 时，还必须等于 `"@" .. arg[0]`。不满足时报错 `service.root: must be required ...`；
+  2. 调用 `bootstrap { source = <该文件>, args = arg[1..n] }`；
+  3. 失败时向 stderr 写 `service.root: <err>`；
+  4. 执行 `os.exit(ok and 0 or 1)`，不会返回。
+
+入口命令固定为 `boot`。
+
+### `service.bootstrap { source, config?, start?, args? } -> true | nil, err`
 
 只能在宿主线程中调用。执行过程如下：
 
 1. 新建一个专用 pool，在其中以 `name = "root"` 创建并启动 root；
-2. 用一条内部 `MESSAGE_SYSTEM` 消息让 root 执行 `start` 命令（缺省为 `"boot"`）；
+2. 用一条内部 `MESSAGE_SYSTEM` 消息让 root 执行 `start` 命令（缺省为 `"boot"`），参数为 `args` 数组中的元素（个数取 `args.n`，没有时取 `#args`）；
 3. join root；
 4. 调用 `_pool_delete`，停止、join 并释放这个 pool 中的所有 service；
 5. 如果 `service.pool` 指向这个已删除的 pool，就把它重置为 nil。
@@ -88,7 +101,7 @@ service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 会�
 | root 的分发循环出错（例如 `on_idle` 抛错） | `nil, <错误字符串>` |
 | root 启动失败 | `nil, "SERVICE_START_FAILED: <errno>"` |
 
-参数不合法（缺少 `source`、`start` 不是字符串）或者在 service 中调用时会抛错。
+参数不合法（缺少 `source`、`start` 不是字符串、`args` 不是 table）或者在 service 中调用时会抛错。
 
 限制：停止是协作式的。如果某个 service 的 handler 永不 yield，`bootstrap` 会一直阻塞。
 
@@ -216,7 +229,7 @@ handler 中的错误只影响当前请求。`on_idle` 中的错误，或者分�
 
 | 值 | 类型 | 用途 |
 | --- | --- | --- |
-| 0 | `MESSAGE_SYSTEM` | 运行时内部使用。目前只处理 payload 为 `("bootstrap", entry)` 的消息，其他直接丢弃 |
+| 0 | `MESSAGE_SYSTEM` | 运行时内部使用。目前只处理 payload 为 `("bootstrap", entry, ...)` 的消息，其他直接丢弃 |
 | 1 | `MESSAGE_REQUEST` | session 为 0 表示 `send`；session > 0 表示 `call` |
 | 2 | `MESSAGE_RESPONSE` | `call` 成功时的响应 |
 | 3 | `MESSAGE_ERROR` | `call` 失败时的响应，payload 是一个错误字符串 |
