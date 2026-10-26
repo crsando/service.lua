@@ -43,7 +43,10 @@ local S = {}
 function S.fail() error("business failure", 0) end
 function S.boot()
     service.log.debug("debug-line")
-    service.log.info("info-line", 42, nil)
+    service.log.info("info-line\t%d\t%s", 42, nil)
+    service.log.info("literal 100%% %s")
+    service.log.info("fmt %.2f|%5s|%x|%s", 3.14159, "ab", 255, {})
+    service.log.info("bad %d", "x")
     service.log.warn("warn-line")
     service.log.error("error-line")
     assert(service.call(service.get_id(), "fail") == nil)
@@ -59,6 +62,11 @@ end
 -- Default: info and above, text format, real Lua location, service tag.
 local out = case("")
 reject(out, "debug%-line", "default")
+-- printf-style formatting; a lone argument is logged verbatim.
+expect(out, "%] literal 100%%%% %%s\n", "default")
+expect(out, "%] fmt 3%.14|   ab|ff|table: 0x%x+\n", "default")
+-- A bad format logs the raw arguments instead of raising.
+expect(out, "%] bad %%d\tx %(log format error: [^\n]*%)\n", "default")
 expect(out, '%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d%.%d%d%d INFO  %[string "[^\n]-%.%.%."%]:6: %[svc 0%] info%-line\t42\tnil\n', "default")
 expect(out, "ERROR [^\n]*%[svc 0%] error%-line", "default")
 -- The callee's error goes back to the caller, so it is only a warning.

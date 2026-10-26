@@ -113,7 +113,7 @@
   - 环境变量在 `pthread_once` 中只读一次。
 - 配置分三层，后者覆盖前者：内置默认值（`info`、format 自动判断）、环境变量 `SERVICE_LOG_LEVEL` / `SERVICE_LOG_FORMAT`、`service.log_config`。环境变量按进程隔离，配置粒度是整个进程。
 - journal 格式：每行带 `<N>` 前缀，不带时间戳。stderr 与 `JOURNAL_STREAM` 指向同一个流时自动启用。
-- Lua 接口：`service.log.debug/info/warn/error`（带调用处的 Lua 位置）、`service.log_config`、`service._log`。`_log_error` 作为兼容别名保留。
+- Lua 接口：`service.log.debug/info/warn/error(fmt, ...)`（printf 风格，等同 `string.format`；只有一个参数时原样输出；格式错误不抛错；带调用处的 Lua 位置）、`service.log_config`、`service._log`。`_log_error` 作为兼容别名保留。
 - 来源标记改为 `[svc N]` / `[host]`，去掉统一的 `handler:` 前缀。
 - 请求 handler 出错时带 traceback：调用方能收到错误的（session > 0）记为 WARN，否则记为 ERROR。
 - `service.root` 的失败输出和 scheduler 的错误输出都改为走 logger，`off` 时完全没有输出。

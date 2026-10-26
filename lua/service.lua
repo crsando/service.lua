@@ -542,19 +542,34 @@ end
 --
 
 -- Records go to stderr as single lines; see doc/api.md for the format.
+-- service.log.<level>(fmt, ...) formats like string.format. A lone argument
+-- is logged as is, so a literal "%" needs no escaping. A bad format never
+-- raises: the raw arguments are logged with the format error appended.
+local function format_log(fmt, ...)
+    local n = select("#", ...)
+    if n == 0 then
+        return tostring(fmt)
+    end
+    local ok, message = pcall(string.format, fmt, ...)
+    if ok then
+        return message
+    end
+    local parts = { tostring(fmt), ... }
+    for i = 2, n + 1 do
+        parts[i] = tostring(parts[i])
+    end
+    return table.concat(parts, "\t", 1, n + 1) ..
+        " (log format error: " .. tostring(message) .. ")"
+end
+
 service.log = {}
 for _, level in ipairs { "debug", "info", "warn", "error" } do
-    service.log[level] = function (...)
+    service.log[level] = function (fmt, ...)
         if not service._log_enabled(level) then
             return
         end
-        local n = select("#", ...)
-        local parts = { ... }
-        for i = 1, n do
-            parts[i] = tostring(parts[i])
-        end
         local info = debug.getinfo(2, "Sl")
-        service._log(service.self, level, table.concat(parts, "\t", 1, n),
+        service._log(service.self, level, format_log(fmt, ...),
             info and info.short_src, info and info.currentline)
     end
 end

@@ -310,8 +310,9 @@ idle hook 在每轮消息分发结束时调用一次（service 启动后会先�
 ### 日志
 
 ```lua
-service.log.info("order accepted", order_id)
-service.log.warn("retrying", attempt)
+service.log.info("order accepted: %d", order_id)       -- printf 风格，同 string.format
+service.log.warn("retrying %d/%d", attempt, max_attempts)
+service.log.info("100% done")                           -- 只有一个参数时原样输出
 ```
 
 运维时不需要改代码：

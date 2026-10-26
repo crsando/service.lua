@@ -254,9 +254,18 @@ session 由调用方按 service 独立分配，在 uint32 范围内回绕时会�
 
 运行时和业务代码共用一个进程级的 logger。每条记录格式化成一行（多行消息如 traceback 也作为一条记录），用一次 `write(2)` 写到 stderr，不同线程的记录不会交错。单条记录最长 4096 字节，超出部分截断并以 `...` 结尾。日志写到哪里由启动进程的一方决定（shell 重定向、systemd 等），运行时不负责打开或轮转文件。
 
-### `service.log.debug/info/warn/error(...)`
+### `service.log.debug/info/warn/error(fmt, ...)`
 
-参数逐个 `tostring` 后用 `\t` 连接。记录中带上调用处的 Lua 文件和行号，以及来源标记：service 中为 `[svc <id>]`，宿主线程中为 `[host]`。级别未启用时直接返回，不做格式化。
+按 `string.format(fmt, ...)` 格式化（printf 风格）。记录中带上调用处的 Lua 文件和行号，以及来源标记：service 中为 `[svc <id>]`，宿主线程中为 `[host]`。
+
+- 级别未启用时直接返回，不做格式化。但参数本身仍会在调用前求值。
+- 只传一个参数时原样输出，不解释 `%`：`log.info("100% done")` 不需要转义。
+- `%s` 可以接受任意值，包括 nil、table、boolean（LuaJIT 会对它们调用 `tostring`）。
+- 格式串与参数不匹配时不会抛错，而是输出原始参数（用 `\t` 连接），并在末尾附上 `(log format error: ...)`，级别不变。
+
+```lua
+service.log.info("tick %s bid=%.1f ask=%.1f vol=%d", code, bid, ask, vol)
+```
 
 ### `service.log_config { level?, format? } -> level, format`
 
@@ -276,8 +285,8 @@ session 由调用方按 service 独立分配，在 uint32 范围内回绕时会�
 ### 格式
 
 ```text
-text:    2026-10-26 09:39:15.123 INFO  service/order.lua:42: [svc 1] order accepted	1001
-journal: <6>service/order.lua:42: [svc 1] order accepted	1001
+text:    2026-10-26 09:39:15.123 INFO  service/order.lua:42: [svc 1] order accepted: 1001
+journal: <6>service/order.lua:42: [svc 1] order accepted: 1001
 ```
 
 - 位置部分（`file:line: `）可能缺省，例如运行时记录的请求错误，它的位置在 traceback 中。
