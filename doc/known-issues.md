@@ -26,7 +26,16 @@ service 停止时，邮箱中未处理的请求由 C 侧回复 ERROR，已接收
 
 为了保证响应不丢，邮箱改为满时翻倍（同 skynet）。代价是没有背压：下游变慢时消息在内存中堆积，可能 OOM，延迟也可能失去意义。目前唯一的信号是 `mailbox may overload` 的 WARN 日志。邮箱只扩不缩。
 
-**方向**：提供 `mailbox_stat`（深度、高水位、容量）；需要背压的 service 可以设置可选的容量上限，此时用"call 时在自己邮箱中预留位置"的方式保证响应不丢（见 mailbox-research.md 方案 3）。
+**方向**：
+
+- 提供 `service.mailbox_stat(target?, { reset? }) -> stat`，设计草案见 [mailbox-research.md §8](mailbox-research.md#8-未来工作mailbox_stat)；
+- 需要背压的 service 可以设置可选的容量上限，此时用"call 时在自己邮箱中预留位置"的方式保证响应不丢（见 mailbox-research.md 方案 3）。
+
+### RT-12（P3）root 无法指定 `mailbox_size`
+
+`service.bootstrap` 创建 root 时没有转发 `mailbox_size`，`require "service.root"` 也没有配置入口，所以 root 只能使用默认的初始容量 1024。
+
+**方向**：bootstrap 的 entry 增加 `mailbox_size` 字段并转发给 `service.new`；`service.root` 从 root 模块读取，例如 `root.mailbox_size`。
 
 ### RT-3（P1）外部线程持有的 async 指针可能比 service 活得更久
 

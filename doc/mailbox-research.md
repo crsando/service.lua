@@ -111,3 +111,47 @@
   - `tests/c/mailbox_test.c`：扩容时保持顺序，包括环形队列已回绕的情况；过载阈值；16 个生产者并发扩容容量为 1 的邮箱（同时在 TSAN 下运行）。
   - `tests/lua/mailbox_spec.lua`：扩容；第 1.1 节的响应丢失场景作为回归测试。
   - `tests/lua/stop_reply_spec.lua`：请求在邮箱中未处理、handler 挂起在 sleep 中、dispatcher 出错导致停止，这三种情况下调用方都得到 `service stopped`。
+
+## 8. 未来工作：mailbox_stat
+
+暂未实现，记录设计草案。
+
+### 8.1 统计数据
+
+全部放在 `mailbox` 结构中，在 push 和 pop 已经持有的 spinlock 内更新，几乎没有额外开销。
+
+| 字段 | 含义 | 用途 |
+| --- | --- | --- |
+| `length` | 当前积压 | 实时负载 |
+| `capacity` | 当前容量 | 扩容到多大，也就是内存占用 |
+| `initial_capacity` | 初始容量 | 对照 |
+| `high_water` | 最高积压，可以读后清零 | 一个时间窗口内的峰值 |
+| `pushed` / `popped` | 累计入队、出队条数（uint64） | 采样相减得到速率；两者的差值反映积压在增长还是在消化 |
+| `grows` | 累计扩容次数 | 判断初始容量是否设小了 |
+
+### 8.2 接口
+
+```c
+typedef struct mailbox_stat {
+    size_t length, capacity, initial_capacity, high_water;
+    uint64_t pushed, popped, grows;
+} mailbox_stat_t;
+void mailbox_stat(mailbox_t *box, mailbox_stat_t *out, bool reset_high_water);
+int service_mailbox_stat(service_pool_t *pool, service_id_t id,
+                         mailbox_stat_t *out, bool reset_high_water);
+```
+
+```lua
+service.mailbox_stat()                        -- 查询自己
+service.mailbox_stat("md")                    -- 按名字或 id 查询其他 service
+service.mailbox_stat("md", { reset = true })  -- 读完后把 high_water 清零
+```
+
+### 8.3 要点
+
+- 查询其他 service 时复用发送路径上的 pin 机制：先 `service_pool_pin`，查完 `service_unpin`。`service_free` 会等 pin 归零后才释放邮箱，因此读取是安全的。目标不可路由时，和 `send` 一样返回 `nil, err`。查询自己时不需要 pin。
+- 用途：
+  - monitor service 定期轮询，计算速率、记录日志或导出到监控系统；
+  - 行情生产者根据下游的 `length` 决定只发最新值，或者暂时丢弃，在业务层弥补无界邮箱缺少的背压；
+  - 根据 `grows` 调整 `mailbox_size`。
+- 暂不做：整个 pool 的统计（需要先有 `service.list()`）；消息在队列中的延迟分布（需要给每条消息打时间戳）。
