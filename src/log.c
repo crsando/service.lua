@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -28,12 +29,13 @@ static pthread_once_t init_once = PTHREAD_ONCE_INIT;
 static int current_level = LOG_INFO;
 static int current_format = LOG_FORMAT_TEXT;
 
+// Names are matched case-insensitively ("WARN", "Warn" and "warn").
 static int
 parse_name(const char *name, const char **names, int count) {
     if (name == NULL)
         return -1;
     for (int i = 0; i < count; i++) {
-        if (strcmp(name, names[i]) == 0)
+        if (strcasecmp(name, names[i]) == 0)
             return i;
     }
     return -1;

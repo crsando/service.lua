@@ -8,14 +8,16 @@
  * the process (shell redirection, systemd, ...).
  *
  * Defaults come from SERVICE_LOG_LEVEL (debug|info|warn|error|off, default
- * info) and SERVICE_LOG_FORMAT (text|journal). Without SERVICE_LOG_FORMAT,
- * journal is chosen when stderr is the stream named by JOURNAL_STREAM.
+ * info) and SERVICE_LOG_FORMAT (text|journal), both case-insensitive.
+ * Without SERVICE_LOG_FORMAT, journal is chosen when stderr is the stream
+ * named by JOURNAL_STREAM.
  */
 
 enum { LOG_DEBUG, LOG_INFO, LOG_WARN, LOG_ERROR, LOG_OFF };
 enum { LOG_FORMAT_TEXT, LOG_FORMAT_JOURNAL };
 
-// Return the level or format for a name, or -1 if the name is unknown.
+// Return the level or format for a name, ignoring case, or -1 if the name
+// is unknown.
 int log_parse_level(const char *name);
 int log_parse_format(const char *name);
 const char *log_level_name(int level);

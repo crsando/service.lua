@@ -120,6 +120,19 @@ assert(service.log_config {} == "info")
 ]])
 assert(out == "", "invalid config: " .. out)
 
+-- Level and format names ignore case, in the environment and in log_config;
+-- log_config reports them in lower case.
+out = case("SERVICE_LOG_LEVEL=WARN SERVICE_LOG_FORMAT=Journal")
+reject(out, "info%-line", "env case")
+expect(out, "\n<3>[^\n]*error%-line", "env case")
+out = run("", [[
+local service = require "service"
+local level, format = service.log_config { level = "Error", format = "TEXT" }
+assert(level == "error" and format == "text", tostring(level) .. " " .. tostring(format))
+assert(service._log_enabled("ERROR") and not service._log_enabled("Warn"))
+]])
+assert(out == "", "log_config case: " .. out)
+
 -- An invalid environment value is reported and ignored.
 out = run("SERVICE_LOG_LEVEL=loud", [[
 require "service".log.info("still-info")

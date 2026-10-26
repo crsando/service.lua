@@ -122,6 +122,9 @@ static void
 test_names(void) {
     assert(log_parse_level("warn") == LOG_WARN);
     assert(log_parse_level("off") == LOG_OFF);
+    assert(log_parse_level("WARN") == LOG_WARN);
+    assert(log_parse_level("Debug") == LOG_DEBUG);
+    assert(log_parse_format("JOURNAL") == LOG_FORMAT_JOURNAL);
     assert(log_parse_level("verbose") == -1);
     assert(log_parse_format("journal") == LOG_FORMAT_JOURNAL);
     assert(log_parse_format(NULL) == -1);

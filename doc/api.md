@@ -269,15 +269,15 @@ service.log.info("tick %s bid=%.1f ask=%.1f vol=%d", code, bid, ask, vol)
 
 ### `service.log_config { level?, format? } -> level, format`
 
-修改进程级配置，作用于所有 service，优先于环境变量。返回当前生效的级别和格式。值非法时抛错，且不做任何修改。可以在任何线程调用，建议在启动时设置一次。
+修改进程级配置，作用于所有 service，优先于环境变量。级别和格式名不区分大小写（`"WARN"`、`"warn"` 都可以）。返回当前生效的级别和格式，统一为小写。值非法时抛错，且不做任何修改。可以在任何线程调用，建议在启动时设置一次。
 
 ### 配置
 
 | 来源 | 说明 |
 | --- | --- |
 | 默认值 | level 为 `info`；format 自动判断 |
-| `SERVICE_LOG_LEVEL` | `debug` / `info` / `warn` / `error` / `off`。非法值会被忽略，并输出一条 WARN |
-| `SERVICE_LOG_FORMAT` | `text` / `journal`。未设置时，如果 stderr 正是 `JOURNAL_STREAM` 指向的流（即由 systemd 接入 journal），使用 `journal`，否则使用 `text` |
+| `SERVICE_LOG_LEVEL` | `debug` / `info` / `warn` / `error` / `off`，不区分大小写。非法值会被忽略，并输出一条 WARN |
+| `SERVICE_LOG_FORMAT` | `text` / `journal`，不区分大小写。未设置时，如果 stderr 正是 `JOURNAL_STREAM` 指向的流（即由 systemd 接入 journal），使用 `journal`，否则使用 `text` |
 | `service.log_config` | 优先级最高 |
 
 环境变量只在第一次写日志或修改配置时读取一次。每个进程有自己的环境变量副本，不同进程互不影响；子进程会继承父进程的环境变量。
