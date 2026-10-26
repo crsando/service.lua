@@ -246,7 +246,11 @@ static int lservice_recv_message(lua_State *L) {
         lua_pushinteger(L, message.to);
         lua_pushinteger(L, message.session);
         lua_pushinteger(L, message.type);
-        lua_pushlightuserdata(L, message.msg);
+        // A message without payload (e.g. a stop ERROR) yields nil.
+        if (message.msg != NULL)
+            lua_pushlightuserdata(L, message.msg);
+        else
+            lua_pushnil(L);
         lua_pushinteger(L, message.sz);
         return 6;
     }

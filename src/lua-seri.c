@@ -899,7 +899,7 @@ luaseri_unpack(lua_State *L) {
 
 int
 luaseri_unpack_remove(lua_State *L) {
-	if (lua_isnoneornil(L, 1)) {
+	if (lua_isnoneornil(L, 1) || lua_touserdata(L, 1) == NULL) {
 		return 0;
 	}
 	return seri_unpackptr(L, lua_touserdata(L, 1));

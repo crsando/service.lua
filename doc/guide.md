@@ -173,14 +173,15 @@ local ok, err = service.send("logger", "write", "hello")
 local v1, v2 = service.call("db", "get", key)
 local ok, err = service.call("db", "put", key, value)
 if ok == nil then
-    -- err 可能是 "service not found" / "service stopping" / "mailbox full"
+    -- err 可能是 "service not found" / "service stopping" / "service stopped"
     -- / "command not found" / handler 抛出的错误字符串
 end
 ```
 
 - 目标可以是 ID（数字）或名字（字符串）。名字只能解析到仍在运行的 service；已停止 service 的名字会得到 `service not found`。
 - `call` 失败时第一个返回值一定是 `nil`，因此可以写成 `assert(service.call(...))`。
-- `call` **没有超时**。如果目标收下请求后既不返回也不报错（例如在回复前就 quit），调用方会永久挂起。
+- `call` **没有超时**。目标在回复前停止时，调用方会收到 `nil, "service stopped"`；但如果目标收下请求后既不返回、也不停止（例如 handler 挂起后再也没有被恢复），调用方会一直等待。
+- 邮箱没有容量上限，发送不会因为对方处理慢而失败。下游处理不过来时消息会在内存中堆积，stderr 中会出现 `mailbox may overload` 的 WARN，这时应在业务层降速或合并消息。
 
 ## 6. 等待与定时
 
@@ -223,7 +224,8 @@ end
 
 - 幂等，并且只是**请求**停止。当前 coroutine 会继续运行，直到它返回或挂起。
 - 调用后，service 不再处理邮箱中的新消息。按 ID 发来的新 `send` 和 `call` 会收到 stopping 或 stopped 错误，按名字发来的会收到 not found。
-- 邮箱里尚未处理的消息会被丢弃。挂起中的 coroutine（正在 `call` 或 `sleep` 的）不会再被恢复。
+- 邮箱里尚未处理的消息会被丢弃，其中的 `call` 请求会得到 `nil, "service stopped"`。
+- 挂起中的 coroutine（正在 `call` 或 `sleep` 的）不会再被恢复；如果它们是在处理别人的 `call`，调用方同样会得到 `nil, "service stopped"`。
 - 所有 luv handle（timer、socket 等）都由运行时关闭，不需要手动清理。
 - 传入 `err` 表示异常退出。root 以 `quit(err)` 退出时，`bootstrap` 返回 `nil, err`。
 
@@ -330,7 +332,8 @@ luajit main.lua 2>>app.log                     # 重定向到文件
 | --- | --- | --- |
 | 入口一直不退出 | 入口命令执行成功后，root 没有调用 `service.quit()`；或者某个 service 的 handler 陷入死循环、永不 yield | 保证 root 最终会 quit。入口命令抛错时，`bootstrap` 会让 root 退出 |
 | `service.call must be called from a managed service coroutine` | 在 luv 回调、idle hook、`set_timeout` 或宿主线程中调用了 call | 先 `send` 给自己，在 handler 中再 call |
-| 调用方永久挂起 | 目标在回复前 quit，或者 handler 自己挂起后再也没有被恢复 | 先返回结果再结束。call 目前没有超时 |
+| 调用方永久挂起 | 目标的 handler 挂起后再也没有被恢复（目标停止时调用方会收到 `service stopped`，不会挂起） | 保证每次挂起都会被恢复。call 目前没有超时 |
+| `mailbox may overload, length = N` | 下游处理速度跟不上，消息在邮箱中堆积 | 业务层降速、批量或合并消息（例如行情只保留最新值） |
 | `Unsupport type function to serialize` | 参数或返回值中含有 Lua 函数、coroutine 或 userdata | 只传数据。lightuserdata 和无 upvalue 的 C 函数可以传 |
 | 状态在 call 之后变了 | 可重入：等待期间其他请求修改了状态 | 在 call 之后重新检查状态，或者用队列串行化 |
 | `cannot open file 'service/x.lua'` | `@` 路径相对于进程的当前目录 | 在正确目录启动，或者使用绝对路径 |

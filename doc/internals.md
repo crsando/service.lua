@@ -13,14 +13,14 @@
                                          │   inbox_async   ← 消息唤醒    │
            service_pool_t                │   control_async ← 停止请求    │
   ┌─────────────────────────────┐        │   luv handles (timer/tcp/…)   │
-  │ lock, services[32], next_id │◀──────▶│ mailbox (bounded MPSC ring)   │
+  │ lock, services[32], next_id │◀──────▶│ mailbox (growable MPSC ring)  │
   └─────────────────────────────┘        └───────────────────────────────┘
 ```
 
 | 文件 | 职责 |
 | --- | --- |
 | `src/service.c/.h` | pool、service 句柄、生命周期、线程主循环、发送与停止 |
-| `src/mailbox.c/.h` | 有界 MPSC 环形队列，用 spinlock 保护 |
+| `src/mailbox.c/.h` | 可扩容的 MPSC 环形队列，用 spinlock 保护，满时翻倍 |
 | `src/message.c/.h` | `message_t` 定义、消息类型、payload 释放 |
 | `src/lservice.c` | `luaopen_service_c` 及其导出函数 |
 | `src/loadluv.c/.h` | 进程内只 `dlopen` 一次 luv，并为每个 VM 绑定各自的 loop |
@@ -40,7 +40,7 @@
 `service_send(pool, msg)`：
 
 1. **pin**：在 pool lock 内检查目标是否 routable，是的话 `send_pins++`。不 routable 时，根据状态返回 `STOPPING` 或 `STOPPED`；没有这个 ID 时返回 `NOT_FOUND`。
-2. **push**：`mailbox_try_push`。可能的结果是 `OK`、`FULL` 或 `CLOSED`。成功时邮箱接管 payload 的所有权。
+2. **push**：`mailbox_try_push`。可能的结果是 `OK`、`FULL` 或 `CLOSED`，其中 `FULL` 只表示扩容时内存分配失败。成功时邮箱接管 payload 的所有权。
 3. **notify**：只有当邮箱从“未调度”变为“已调度”时，才调用 `uv_async_send(inbox_async)`，这样可以合并重复唤醒。
 4. **unpin**：`send_pins--`。降到 0 时广播 `pins_changed`。
 
@@ -50,7 +50,10 @@
 
 ## 4. 邮箱与分发
 
-邮箱内部状态包括 `items[capacity]`、`head`、`tail`、`count`、`closed` 和 `scheduled`。
+邮箱内部状态包括 `items[capacity]`、`head`、`tail`、`count`、`closed`、`scheduled`，以及过载检测用的 `overload` 和 `overload_threshold`。
+
+- **扩容**：push 时如果已满，先释放 spinlock，在锁外分配两倍容量的新缓冲区，然后重新加锁。如果容量在此期间没有被别的生产者改变、并且仍然是满的，就按 FIFO 顺序把旧内容搬进新缓冲区；否则丢弃新缓冲区，重新判断。旧缓冲区在解锁后释放。这样其他生产者和消费者不会在 spinlock 上等待 malloc。邮箱只扩不缩。
+- **过载检测**（与 skynet 相同）：pop 后如果 `count` 超过阈值，就记下 `count`，并把阈值翻倍直到超过 `count`；pop 遇到空队列时，阈值恢复为初始容量。每轮分发结束后，C 侧取出这个记录（`mailbox_overload`），如果非 0 就输出 WARN。
 
 - 生产者 push 成功，并且 `scheduled` 为 false 时，把它置为 true 并通知消费者。
 - 消费者 pop 时遇到空队列，就把 `scheduled` 清为 false，以便下一次 push 能重新唤醒它。
@@ -95,11 +98,12 @@ NEW ─start─▶ STARTING ─init ok─▶ RUNNING ─stop─▶ STOPPING ─t
 2. 状态切换到 STOPPING，关闭邮箱；
 3. 第一次请求时调用 `uv_async_send(control_async)`。
 
-**控制回调**（在 service 线程执行）：等待 `send_pins` 归零，然后取出并释放邮箱中剩余的消息，最后关闭两个 async handle。这两个 handle 关闭完成后，用 `uv.walk` 关闭所有 luv handle，此时 loop 自然退出。
+**控制回调**（在 service 线程执行）：等待 `send_pins` 归零，然后取出并释放邮箱中剩余的消息，其中 session > 0 的 REQUEST 先回复一条不带 payload 的 ERROR；最后关闭两个 async handle。这两个 handle 关闭完成后，用 `uv.walk` 关闭所有 luv handle，此时 loop 自然退出。
 
 **线程收尾**（`service_finish_thread`）：
 
 - 再执行一遍 prepare_shutdown，覆盖启动失败的路径；
+- 如果 Lua 已初始化完成，以 `"stop"` 调用一次 dispatcher，回复已接收、尚未回复的请求；
 - 循环执行 close handles、`uv_run`、`uv_loop_close`，直到 loop 不再处于忙状态；
 - `lua_close`，状态切换到 STOPPED。
 
@@ -116,7 +120,8 @@ NEW ─start─▶ STARTING ─init ok─▶ RUNNING ─stop─▶ STOPPING ─t
 **限制**：
 
 - 停止是协作式的。运行时无法打断一个永不 yield 的 handler。
-- 停止时不会恢复挂起中的 `call` 或 `sleep`。这些 coroutine 随 VM 一起销毁。
+- 停止时不会恢复挂起中的 `call` 或 `sleep`，这些 coroutine 随 VM 一起销毁。但在销毁之前，`service_finish_thread` 会以 `"stop"` 为参数调用一次 dispatcher，由 Lua 为所有已接收、尚未回复的请求（session > 0）回复不带 payload 的 ERROR。调用方的 `call` 收到这种 ERROR 时返回 `nil, "service stopped"`。
+- 不带 payload 的消息在 Lua 中表现为 `msg == nil`。
 
 ## 7. luv 加载
 
@@ -129,7 +134,7 @@ NEW ─start─▶ STARTING ─init ok─▶ RUNNING ─stop─▶ STOPPING ─t
 使用 ltask 版本的 lua-seri，并针对 LuaJIT 修正了共享引用和小数键的问题。
 
 - buffer 由 `malloc` 分配，用 `free` 释放。运行时信任 `ptr` 和 `size` 的来源。
-- 发送路径上，所有权从发送方转移到邮箱，再转移到接收方，接收方通过 `unpack_remove` 或 `remove` 释放。失败的发送、停止时清空邮箱、找不到 session 的响应，都会由运行时负责释放。
+- 发送路径上，所有权从发送方转移到邮箱，再转移到接收方，接收方通过 `unpack_remove` 或 `remove` 释放。失败的发送、停止时清空邮箱、找不到 session 的响应，都会由运行时负责释放。payload 可以为空（NULL），例如停止时回复的 ERROR。
 - 编码格式不是对外 ABI，只保证 `pack`、`unpack`、`unpack_remove`、`remove` 这几个 Lua 接口的调用形式稳定。
 
 ## 9. 不变量清单

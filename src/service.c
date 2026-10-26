@@ -40,6 +40,11 @@ service_async_cb(uv_async_t *handle) {
     }
     lua_settop(service->L, top);
 
+    size_t overload = mailbox_overload(service->inbox);
+    if (overload > 0)
+        log_warn("[svc %u] mailbox may overload, length = %zu",
+            service->id, overload);
+
     if (handler_failed) {
         service_stop(service);
         return;
@@ -437,12 +442,42 @@ service_init_lua(service_t *service) {
     return 0;
 }
 
+// Requests that were never handled get an ERROR without payload, which
+// call reports as "service stopped", so their callers do not hang.
 static void
 service_drain_mailbox(service_t *service) {
     message_t message;
 
-    while (mailbox_try_pop(service->inbox, &message))
+    while (mailbox_try_pop(service->inbox, &message)) {
+        if (message.type == MESSAGE_REQUEST && message.session > 0) {
+            message_t reply = {
+                .from = service->id,
+                .to = message.from,
+                .session = message.session,
+                .type = MESSAGE_ERROR,
+            };
+            (void)service_send(service->pool, &reply);
+        }
         message_dispose(&message);
+    }
+}
+
+// Lets Lua reply to requests it accepted but has not answered yet, e.g.
+// handlers suspended in call or sleep. Runs on the service thread after the
+// mailbox is closed, while the VM is still alive.
+static void
+service_notify_lua_stop(service_t *service) {
+    lua_State *L = service->L;
+
+    if (L == NULL || service->func_ref == LUA_NOREF ||
+        service->func_ref == LUA_REFNIL)
+        return;
+    int top = lua_gettop(L);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, service->func_ref);
+    lua_pushliteral(L, "stop");
+    if (lua_pcall(L, 1, 0, 0) != LUA_OK)
+        log_error("[svc %u] stop: %s", service->id, lua_tostring(L, -1));
+    lua_settop(L, top);
 }
 
 typedef struct luv_close_context {
@@ -605,6 +640,7 @@ service_finish_thread(service_t *service) {
     pthread_mutex_unlock(&service->state_lock);
 
     service_prepare_shutdown(service);
+    service_notify_lua_stop(service);
     if (loop_ready) {
         for (;;) {
             service_close_runtime_handles(service);

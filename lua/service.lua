@@ -327,6 +327,10 @@ function service.call(id, ...)
 	if type == MESSAGE_RESPONSE then
 		return service.unpack_remove(msg, sz)
 	elseif type == MESSAGE_ERROR then
+        -- An ERROR without payload means the target stopped first.
+        if msg == nil then
+            return nil, CALL_SEND_ERROR.SERVICE_STOPPED
+        end
         local message = service.unpack_remove(msg, sz)
         return nil, message
 	else
@@ -426,9 +430,25 @@ function service.dispatch(request_handler)
         resume_session(co)
     end
 
+    -- Called once by the runtime when the service stops. Requests that were
+    -- accepted but not answered get an ERROR without payload.
+    local function reply_pending()
+        for co, session in pairs(session_coroutine_response) do
+            local from = session_coroutine_address[co]
+            if from ~= nil and session > 0 then
+                service._send_message(service.pool, service.get_id(), from,
+                    session, MESSAGE_ERROR)
+            end
+        end
+    end
+
     service._on_msg = function (msg)
         -- if in standalone mode
         if not service.self then return false end
+        if msg == "stop" then
+            reply_pending()
+            return false
+        end
 
         local processed = 0
 

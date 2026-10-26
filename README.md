@@ -2,7 +2,7 @@
 
 `service.lua` 是一个面向 LuaJIT 2.1（Lua 5.1 C API）的**进程内多线程 Actor 运行时**。
 
-每个 service 独占一个 pthread、一个 LuaJIT VM、一个 libuv loop 和一个有界邮箱。service 之间不共享 Lua 对象，只通过序列化后的消息通信。业务代码在 coroutine 里用同步写法完成 RPC 和等待。
+每个 service 独占一个 pthread、一个 LuaJIT VM、一个 libuv loop 和一个邮箱。service 之间不共享 Lua 对象，只通过序列化后的消息通信。业务代码在 coroutine 里用同步写法完成 RPC 和等待。
 
 ```lua
 -- main.lua：直接运行 luajit main.lua
@@ -22,7 +22,8 @@ return root
 
 - **线程隔离**：一个 service 对应一个线程、一个 VM、一个 loop。不同 service 的 Lua 状态完全独立，没有全局解释器锁。
 - **同步写法的 RPC**：`service.call` 在当前 coroutine 内挂起，等到响应后恢复，等待期间 service 照常处理其他消息。
-- **显式失败**：目标不存在、正在停止或邮箱已满时，`send` 和 `call` 返回 `nil, err`，不会静默丢消息。handler 抛出的错误会作为 `nil, err` 回到调用方。
+- **显式失败**：目标不存在或正在停止时，`send` 和 `call` 返回 `nil, err`，不会静默丢消息。handler 抛出的错误会作为 `nil, err` 回到调用方；目标在回复前停止时，调用方收到 `nil, "service stopped"`。
+- **不丢响应**：邮箱满时自动翻倍（同 skynet），积压过多时输出过载告警。
 - **内置 libuv**：每个 service 里的 `require "luv"` 已绑定到该 service 自己的 loop，timer、socket、子进程等可以直接使用。
 - **可接入外部线程**：C/C++ 回调线程可以通过 `service.get_async()` 唤醒 service，再由 `service.add_idle_hook` 注册的 hook 在 service 线程内取走数据（见[使用指南](doc/guide.md#外部线程接入)）。
 - **日志**：`service.log.*` 输出到 stderr，可通过 `SERVICE_LOG_LEVEL` 关闭或调整级别，在 systemd 下自动使用 journal 格式。

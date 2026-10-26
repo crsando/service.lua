@@ -14,15 +14,19 @@
 
 ### RT-1（P1）`call` 没有超时和取消
 
-请求被接收后，调用方会无限期等待。如果目标在回复前 quit，或者某个 handler 挂起后再也没有被恢复，调用方就永远挂起。实际项目（例如 CTP trader）已经不得不自己实现超时。
+请求被接收后，调用方会一直等待，直到收到响应或者目标停止。如果目标的某个 handler 挂起后再也没有被恢复，而目标又没有停止，调用方就永远挂起。实际项目（例如 CTP trader）已经不得不自己实现超时。
 
 **方向**：提供 `service.call_timeout(ms, target, ...)` 或类似的选项。超时只在调用方一侧生效：超时后从等待表中移除这个 session，迟到的响应按“找不到 session”直接释放。这样不需要放宽 completion 必达的信任模型。
 
-### RT-2（P1）停止时挂起中的 coroutine 被直接丢弃
+### RT-2（P1）停止时挂起中的 coroutine 被直接丢弃 —— 已解决
 
-quit 之后，等待中的 `call` 和 `sleep` 永远不会被恢复。其他 service 中正在等待本 service 回复的调用方也会一直挂起。
+service 停止时，邮箱中未处理的请求由 C 侧回复 ERROR，已接收、尚未回复的请求由 Lua 侧回复 ERROR，调用方得到 `nil, "service stopped"`。本 service 自己挂起中的 `call` 和 `sleep` 仍然不会被恢复，它们随 VM 一起销毁。详见 [mailbox-research.md](mailbox-research.md)。
 
-**方向**：停止时，对邮箱中残留的 REQUEST（session > 0）回复 `ERROR "service stopped"`。这一步可以在 C 侧清空邮箱时完成。
+### RT-11（P2）邮箱没有容量上限
+
+为了保证响应不丢，邮箱改为满时翻倍（同 skynet）。代价是没有背压：下游变慢时消息在内存中堆积，可能 OOM，延迟也可能失去意义。目前唯一的信号是 `mailbox may overload` 的 WARN 日志。邮箱只扩不缩。
+
+**方向**：提供 `mailbox_stat`（深度、高水位、容量）；需要背压的 service 可以设置可选的容量上限，此时用"call 时在自己邮箱中预留位置"的方式保证响应不丢（见 mailbox-research.md 方案 3）。
 
 ### RT-3（P1）外部线程持有的 async 指针可能比 service 活得更久
 
@@ -85,8 +89,7 @@ standalone 中 `get_id()` 返回 0，与 root 的 ID 相同。由于宿主线程
 
 1. SEC-1 的凭据轮换（外部动作，不依赖代码）。
 2. RT-1：调用方超时。
-3. RT-2：停止时回复 ERROR，解决“调用方挂起”的问题。
 4. RT-3、RT-4、RT-5：把外部线程接入、idle hook 的错误隔离、挂起和唤醒做成正式 API。CTP 这类集成目前依赖的正是这些底层接口。
 5. RT-9 及工程类条目。
 
-已完成：RT-6（bootstrap 返回结果并回收整个 pool）、RT-7（`lookup` 不再把非字符串名字解析为 root）。
+已完成：RT-2（停止时回复挂起中的请求）、RT-6（bootstrap 返回结果并回收整个 pool）、RT-7（`lookup` 不再把非字符串名字解析为 root）。

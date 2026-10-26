@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 typedef struct spinlock {
@@ -15,6 +16,11 @@ struct mailbox {
     size_t head;
     size_t tail;
     size_t count;
+    size_t initial_capacity;
+    // Overload report as in skynet: the threshold doubles past each report
+    // and resets once the mailbox drains.
+    size_t overload;
+    size_t overload_threshold;
     bool closed;
     bool scheduled;
 };
@@ -63,19 +69,57 @@ mailbox_new(size_t capacity) {
 
     atomic_init(&box->lock.locked, false);
     box->capacity = capacity;
+    box->initial_capacity = capacity;
+    box->overload_threshold = capacity;
     return box;
+}
+
+// Moves the queued items into grown, which holds twice the capacity, and
+// returns the old buffer for the caller to free outside the lock.
+static message_t *
+grow_locked(mailbox_t *box, message_t *grown) {
+    message_t *old = box->items;
+
+    for (size_t i = 0; i < box->count; i++)
+        grown[i] = old[(box->head + i) % box->capacity];
+    box->items = grown;
+    box->head = 0;
+    box->tail = box->count;
+    box->capacity *= 2;
+    return old;
 }
 
 mailbox_result_t
 mailbox_try_push(mailbox_t *box, const message_t *message, bool *notify) {
     mailbox_result_t result = MAILBOX_OK;
+    message_t *spare = NULL;
+    message_t *garbage = NULL;
 
     *notify = false;
     spin_lock(&box->lock);
+    while (!box->closed && box->count == box->capacity) {
+        size_t capacity = box->capacity;
+
+        if (spare != NULL) {
+            garbage = grow_locked(box, spare);
+            spare = NULL;
+            break;
+        }
+        // Allocate outside the lock so other producers and the consumer
+        // never spin on a malloc. Another producer may grow it meanwhile.
+        spin_unlock(&box->lock);
+        if (capacity <= SIZE_MAX / 2 / sizeof(*spare))
+            spare = malloc(capacity * 2 * sizeof(*spare));
+        if (spare == NULL)
+            return MAILBOX_FULL;
+        spin_lock(&box->lock);
+        if (box->capacity != capacity) {
+            free(spare);
+            spare = NULL;
+        }
+    }
     if (box->closed) {
         result = MAILBOX_CLOSED;
-    } else if (box->count == box->capacity) {
-        result = MAILBOX_FULL;
     } else {
         box->items[box->tail] = *message;
         box->tail = (box->tail + 1) % box->capacity;
@@ -86,6 +130,8 @@ mailbox_try_push(mailbox_t *box, const message_t *message, bool *notify) {
         }
     }
     spin_unlock(&box->lock);
+    free(spare);
+    free(garbage);
     return result;
 }
 
@@ -99,8 +145,13 @@ mailbox_try_pop(mailbox_t *box, message_t *out) {
         box->head = (box->head + 1) % box->capacity;
         box->count--;
         found = true;
+        while (box->count > box->overload_threshold) {
+            box->overload = box->count;
+            box->overload_threshold *= 2;
+        }
     } else {
         box->scheduled = false;
+        box->overload_threshold = box->initial_capacity;
     }
     spin_unlock(&box->lock);
     return found;
@@ -116,6 +167,27 @@ mailbox_finish_batch(mailbox_t *box) {
         box->scheduled = false;
     spin_unlock(&box->lock);
     return more;
+}
+
+size_t
+mailbox_overload(mailbox_t *box) {
+    size_t overload;
+
+    spin_lock(&box->lock);
+    overload = box->overload;
+    box->overload = 0;
+    spin_unlock(&box->lock);
+    return overload;
+}
+
+size_t
+mailbox_capacity(mailbox_t *box) {
+    size_t capacity;
+
+    spin_lock(&box->lock);
+    capacity = box->capacity;
+    spin_unlock(&box->lock);
+    return capacity;
 }
 
 void

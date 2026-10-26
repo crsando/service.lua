@@ -41,7 +41,7 @@ local service = require "service"
 | `source` | 是 | `"@path.lua"`（相对于进程当前目录）或 Lua 源码字符串 |
 | `name` | 否 | 在存活 service 中唯一，最多 31 字节 |
 | `config` | 否 | table（自动 `pack`）或来自 `service.pack` 的指针。所有权移交给运行时 |
-| `mailbox_size` | 否 | 整数，范围 16..65536，默认 1024 |
+| `mailbox_size` | 否 | 邮箱的初始容量，整数，范围 16..65536，默认 1024。邮箱满时自动翻倍，没有上限，见 [§5](#5-消息) |
 | `pool` | 否 | 指定 pool。缺省使用 `service.pool`，没有则新建 |
 
 只登记 service，不启动线程。以下情况抛出 `could not create service`：名字重复或过长、pool 已创建满 32 个、内存不足。
@@ -128,9 +128,11 @@ service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 和�
 | `SERVICE_NOT_FOUND` | ID 越界、ID 未分配或名字不存在 |
 | `SERVICE_STOPPING` | 目标已请求停止，线程尚未退出 |
 | `SERVICE_STOPPED` | 目标已停止 |
-| `MAILBOX_FULL` | 目标邮箱已满 |
+| `MAILBOX_FULL` | 目标邮箱扩容失败（内存不足）。邮箱本身没有容量上限 |
 
 返回 `true` 只表示目标邮箱已经接收这条消息。返回失败时，这条消息一定不会被处理。
+
+邮箱没有容量上限：满了就翻倍，不会缩小，所以发送不会因为对方处理慢而失败，响应也一定能送达。代价是没有背压，下游变慢时消息会在内存中堆积。积压超过初始容量时，运行时以 WARN 级别输出 `mailbox may overload, length = N`；之后每当积压翻倍再输出一次，邮箱清空后阈值恢复。
 
 ### `service.loopback(...)`
 
@@ -143,11 +145,12 @@ service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 和�
 | err | 来源 |
 | --- | --- |
 | `service not found` / `service stopping` / `service stopped` / `mailbox full` | 请求未被接收。不会挂起，立即返回 |
+| `service stopped` | 请求已被接收，但目标在回复前停止了：请求还在邮箱中未处理，或者 handler 正挂起在 `call`/`sleep` 中 |
 | `command not found` | table handler 中没有该命令 |
 | handler 抛出的错误字符串 | 例如 `service/echo.lua:11: unknown command: nope` |
 | `handler error` | handler 抛出的错误对象无法转为字符串 |
 
-没有超时和取消机制。请求被接收之后，调用方会一直等到响应到达为止。
+没有超时和取消机制。请求被接收之后，调用方会一直等到响应到达，或者目标停止为止。目标既不回复也不停止（例如 handler 挂起后再也没有被恢复）时，调用方会一直等待。
 
 ### 底层接口
 

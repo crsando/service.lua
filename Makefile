@@ -32,7 +32,7 @@ SERVICE_DEFS := -D_POSIX_C_SOURCE=200809L -DLUV_LOADER_TESTING
 
 LUA_SPECS := serializer_spec serializer_shared_ref_spec lifecycle_spec \
              mailbox_spec rpc_spec rpc_cross_service_spec dispatch_batch_spec \
-             table_source_spec bootstrap_spec root_spec idle_hook_spec log_spec \
+             table_source_spec bootstrap_spec root_spec idle_hook_spec log_spec stop_reply_spec \
              scheduler_spec scheduler_daily_spec
 
 .PHONY: all test test-contract test-mailbox test-log test-service test-lua \
