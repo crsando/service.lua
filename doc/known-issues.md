@@ -30,11 +30,13 @@ quit 之后，等待中的 `call` 和 `sleep` 永远不会被恢复。其他 ser
 
 **方向**：提供正式的 notifier 对象（例如 `service.notifier()`），用引用计数加关闭标志包装 async handle，并在 C 层提供 `notifier_signal()` 和 `notifier_release()`。service 停止后，`signal` 变为空操作。
 
-### RT-4（P2）`on_idle` 只有一个槽位，出错会停止 service
+### RT-4（P2）idle 回调出错会停止 service
 
-同一个 service 中的多个模块会互相覆盖 `service.on_idle`。`on_idle` 中任何未捕获的错误都会让 dispatcher 的 `pcall` 失败，进而停止整个 service。
+多个 idle 回调的问题已解决：`service.add_idle_hook(fn) -> remove` 可注册多个 hook，`service.on_idle` 保留以兼容旧代码。
 
-**方向**：提供 `service.add_idle(fn) -> remove`，并对每个回调单独做 `xpcall` 和记录日志。保留 `service.on_idle` 以兼容旧代码。
+仍未解决：`on_idle` 或任何 hook 中未捕获的错误都会让 dispatcher 的 `pcall` 失败，进而停止整个 service。hook 运行期间也不能增删 hook。
+
+**方向**：如有需要，再对每个 hook 单独做 `xpcall` 和记录日志。
 
 ### RT-5（P2）挂起和唤醒的底层接口缺少保护
 
@@ -82,7 +84,7 @@ standalone 中 `get_id()` 返回 0，与 root 的 ID 相同。由于宿主线程
 1. SEC-1 的凭据轮换（外部动作，不依赖代码）。
 2. RT-1：调用方超时。
 3. RT-2：停止时回复 ERROR，解决“调用方挂起”的问题。
-4. RT-3、RT-4、RT-5：把外部线程接入、多个 idle 回调、挂起和唤醒做成正式 API。CTP 这类集成目前依赖的正是这些底层接口。
+4. RT-3、RT-4、RT-5：把外部线程接入、idle hook 的错误隔离、挂起和唤醒做成正式 API。CTP 这类集成目前依赖的正是这些底层接口。
 5. RT-9 及工程类条目。
 
 已完成：RT-6（bootstrap 返回结果并回收整个 pool）、RT-7（`lookup` 不再把非字符串名字解析为 root）。

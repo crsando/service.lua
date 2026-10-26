@@ -14,7 +14,7 @@ local service = require "service"
 | --- | --- |
 | service | service 线程中的 Lua 代码。`service.self` 不为 nil |
 | 请求 coroutine | 运行时为每条请求创建的 coroutine。只有这里能调用 `call`、`sleep`、`get_session` |
-| 回调 | luv 回调、`set_timeout` 回调、`on_idle`、scheduler 任务。属于 service 上下文，但不是请求 coroutine |
+| 回调 | luv 回调、`set_timeout` 回调、`on_idle` 与 idle hook、scheduler 任务。属于 service 上下文，但不是请求 coroutine |
 | standalone | 宿主线程（入口脚本）。`service.self == nil`，只应调用 `bootstrap/new/start/send/join` |
 
 ## 2. 模块字段
@@ -49,7 +49,7 @@ local service = require "service"
 
 创建线程并等待初始化完成。初始化包括：建立 loop、加载 luv、绑定 `service`、执行 source、规范化 handler。失败时抛出 `SERVICE_START_FAILED: <errno>`，并已回收该 service 的线程。具体原因（如 source 语法错误）会写入 stderr 日志。
 
-service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 会在启动后马上被调用一次。
+service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 和已注册的 idle hook 会在启动后马上被调用一次。
 
 ### `service.spawn(options) -> id`
 
@@ -182,10 +182,16 @@ service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 会�
 2. `REQUEST` 消息：新建 coroutine 执行 handler。session > 0 时把返回值或错误回给调用方；
 3. `RESPONSE`/`ERROR` 消息（session > 0）：恢复对应 session 中挂起的 `call`。找不到对应 session 的响应直接丢弃；
 4. 其他类型：直接丢弃；
-5. 如果 service 尚未 quit 且设置了 `service.on_idle`，调用一次 `on_idle`；
+5. 如果 service 尚未 quit：先调用 `service.on_idle`（若已设置），再按注册顺序调用 `add_idle_hook` 注册的 hook；
 6. 如果本轮处理满了 256 条，再唤醒自己一次，以便 timer 和 socket 有机会执行。
 
-handler 中的错误只影响当前请求。`on_idle` 中的错误，或者分发循环本身的错误，会停止整个 service。
+handler 中的错误只影响当前请求。`on_idle` 或 idle hook 中的错误，或者分发循环本身的错误，会停止整个 service。
+
+### `service.add_idle_hook(fn) -> remove`
+
+注册一个 idle hook，每轮分发结束时在 `service.on_idle` 之后按注册顺序调用。返回的 `remove()` 注销这次注册，重复调用无副作用。同一个函数注册多次会被调用多次。
+
+hook 是同步回调，约束与 `on_idle` 相同。hook 运行期间（包括 `on_idle` 中）不得调用 `add_idle_hook` 或 `remove`。
 
 ## 8. 序列化
 

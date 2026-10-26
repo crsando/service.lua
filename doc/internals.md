@@ -57,8 +57,8 @@
 - `inbox_async` 触发后，C 回调 `service_async_cb` 调用 Lua dispatcher（`service._on_msg`）。Lua 侧最多循环 pop 256 条消息。
   - 如果本轮因为遇到空队列而结束，`scheduled` 已在 pop 时被清除。
   - 如果本轮处理满 256 条，Lua 返回 true。C 侧调用 `mailbox_finish_batch`：仍有消息时保持 `scheduled` 并再次唤醒自己，否则清除 `scheduled`。这样 timer 和 socket 回调可以插在两轮分发之间执行。
-- 每一轮结束时都会调用 `service.on_idle`。外部代码直接 `uv_async_send(inbox_async)` 也会触发一轮（这一轮里可能没有消息），这就是[外部线程接入](guide.md#外部线程接入)的基础。libuv 可能把多次 `uv_async_send` 合并成一次回调，因此 `on_idle` 必须把外部队列取空。
-- 如果 dispatcher 本身出错（`lua_pcall` 失败，包括 `on_idle` 抛出的错误），service 会被停止。
+- 每一轮结束时都会调用 `service._on_idle`，它先调用 `service.on_idle`（若有），再按注册顺序调用 `add_idle_hook` 注册的 hook。外部代码直接 `uv_async_send(inbox_async)` 也会触发一轮（这一轮里可能没有消息），这就是[外部线程接入](guide.md#外部线程接入)的基础。libuv 可能把多次 `uv_async_send` 合并成一次回调，因此 hook 必须把外部队列取空。
+- 如果 dispatcher 本身出错（`lua_pcall` 失败，包括 `on_idle` 或 idle hook 抛出的错误），service 会被停止。
 
 ## 5. RPC
 

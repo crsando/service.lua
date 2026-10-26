@@ -280,28 +280,29 @@ C/C++ 库（例如交易柜台 SDK）往往在自己的线程上回调。推荐�
 
 1. C 层把数据放进自己的线程安全队列；
 2. C 层对 `service.get_async()` 返回的 `uv_async_t*` 调用 `uv_async_send` 唤醒 service；
-3. service 在 `service.on_idle` 中以非阻塞方式取完队列。
+3. service 在 idle hook（`service.add_idle_hook`）中以非阻塞方式取完队列。
 
 ```lua
 local sdk = native.new_client(service.config.server)
 sdk:set_async(service.get_async())
 
-function service.on_idle()
+local remove_hook = service.add_idle_hook(function()
     while true do
         local event = sdk:poll()        -- 非阻塞
         if event == nil then return end
         handle_event(event)
     end
-end
+end)
 ```
 
-`on_idle` 在每轮消息分发结束时调用一次（service 启动后会先调用一次）。被外部唤醒但邮箱为空的轮次也会调用，所以外部唤醒一定能让 `on_idle` 运行。
+idle hook 在每轮消息分发结束时调用一次（service 启动后会先调用一次），顺序是先 `service.on_idle`、再按注册顺序调用各个 hook。被外部唤醒但邮箱为空的轮次也会调用，所以外部唤醒一定能让 hook 运行。
 
 注意事项：
 
-- `on_idle` 是同步回调，不能调用 `call` 或 `sleep`。需要的话，用 `send` 转给自己处理，或者用 `resume_session` 恢复等待中的请求。
-- `on_idle` 中抛出的错误会**停止整个 service**，需要时请自行 `pcall`。
-- `service.on_idle` 只有一个槽位。同一个 service 里的多个模块要共用它，需要自己做组合。
+- idle hook 和 `on_idle` 都是同步回调，不能调用 `call` 或 `sleep`。需要的话，用 `send` 转给自己处理，或者用 `resume_session` 恢复等待中的请求。
+- idle hook 或 `on_idle` 中抛出的错误会**停止整个 service**，需要时请自行 `pcall`。
+- hook 运行期间不要注册或注销 hook。
+- `service.on_idle` 只有一个槽位，仅为兼容旧代码保留。多个模块请各自用 `add_idle_hook` 注册。
 - C 层只能对 service 处于运行状态时取得的 async 指针调用 `uv_async_send`，并且必须在 service 停止前停止回调。
 
 ## 9. 常见陷阱
@@ -309,7 +310,7 @@ end
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | 入口一直不退出 | 入口命令执行成功后，root 没有调用 `service.quit()`；或者某个 service 的 handler 陷入死循环、永不 yield | 保证 root 最终会 quit。入口命令抛错时，`bootstrap` 会让 root 退出 |
-| `service.call must be called from a managed service coroutine` | 在 luv 回调、`on_idle`、`set_timeout` 或宿主线程中调用了 call | 先 `send` 给自己，在 handler 中再 call |
+| `service.call must be called from a managed service coroutine` | 在 luv 回调、idle hook、`set_timeout` 或宿主线程中调用了 call | 先 `send` 给自己，在 handler 中再 call |
 | 调用方永久挂起 | 目标在回复前 quit，或者 handler 自己挂起后再也没有被恢复 | 先返回结果再结束。call 目前没有超时 |
 | `Unsupport type function to serialize` | 参数或返回值中含有 Lua 函数、coroutine 或 userdata | 只传数据。lightuserdata 和无 upvalue 的 C 函数可以传 |
 | 状态在 call 之后变了 | 可重入：等待期间其他请求修改了状态 | 在 call 之后重新检查状态，或者用队列串行化 |

@@ -24,7 +24,7 @@ return root
 - **同步写法的 RPC**：`service.call` 在当前 coroutine 内挂起，等到响应后恢复，等待期间 service 照常处理其他消息。
 - **显式失败**：目标不存在、正在停止或邮箱已满时，`send` 和 `call` 返回 `nil, err`，不会静默丢消息。handler 抛出的错误会作为 `nil, err` 回到调用方。
 - **内置 libuv**：每个 service 里的 `require "luv"` 已绑定到该 service 自己的 loop，timer、socket、子进程等可以直接使用。
-- **可接入外部线程**：C/C++ 回调线程可以通过 `service.get_async()` 唤醒 service，再由 `service.on_idle` 在 service 线程内取走数据（见[使用指南](doc/guide.md#外部线程接入)）。
+- **可接入外部线程**：C/C++ 回调线程可以通过 `service.get_async()` 唤醒 service，再由 `service.add_idle_hook` 注册的 hook 在 service 线程内取走数据（见[使用指南](doc/guide.md#外部线程接入)）。
 - **可选调度器**：`service.scheduler` 提供绝对时间和每日定时任务。
 
 ## 依赖

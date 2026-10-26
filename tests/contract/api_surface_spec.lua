@@ -30,6 +30,7 @@ assert_functions(service, {
     "call",
     "get_session",
     "quit",
+    "add_idle_hook",
     "dispatch",
     "bootstrap",
     "sleep",

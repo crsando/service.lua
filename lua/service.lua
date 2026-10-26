@@ -344,9 +344,38 @@ function service.quit(err)
     service._stop(service.self, err ~= nil and error_message(err) or nil)
 end
 
+local idle_hooks = {}
+-- Hooks run after service.on_idle, in registration order. They must not add
+-- or remove hooks while running.
+function service.add_idle_hook(fn)
+    assert(type(fn) == "function", "idle hook must be a function")
+    idle_hooks[#idle_hooks + 1] = fn
+    local removed = false
+    return function ()
+        if removed then return end
+        removed = true
+        for i = 1, #idle_hooks do
+            if idle_hooks[i] == fn then
+                table.remove(idle_hooks, i)
+                return
+            end
+        end
+    end
+end
+
 --
 -- internal procedures
 --
+
+function service._on_idle()
+    local on_idle = service.on_idle
+    if on_idle then
+        on_idle()
+    end
+    for i = 1, #idle_hooks do
+        idle_hooks[i]()
+    end
+end
 
 function service.dispatch(request_handler)
     local request; do
@@ -425,8 +454,8 @@ function service.dispatch(request_handler)
         end
 
         -- Synchronous end-of-round hook; the mailbox may still have messages.
-        if (not quit) and service.on_idle then
-            service.on_idle()
+        if not quit then
+            service._on_idle()
         end
 
         return (not quit) and processed == DISPATCH_BATCH_SIZE
