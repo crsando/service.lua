@@ -466,6 +466,7 @@ end -- end service.dispatch
 
 -- Runs root in a fresh pool until it exits, then stops, joins and frees every
 -- service in that pool. Returns true, or nil and the reason root stopped.
+-- @comment: 目前这里只是为了继续兼容旧代码，新代码我们统一建议采用 local root = require "service.root" 方式，直接定义root.lua模块，然后自举启动服务
 function service.bootstrap(entry)
     assert(type(entry) == "table", "bootstrap entry must be a table")
     assert(type(entry.source) == "string", "entry.source must be a string")
