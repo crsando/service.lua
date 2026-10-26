@@ -25,16 +25,17 @@ SRCS   := src/lservice.c src/service.c src/loadluv.c src/mailbox.c \
 HDRS   := $(wildcard src/*.h)
 
 MAILBOX_SRCS := tests/c/mailbox_test.c src/mailbox.c src/message.c
+LOG_SRCS     := tests/c/log_test.c src/log.c
 SERVICE_SRCS := tests/c/service_lifecycle_test.c src/service.c src/loadluv.c \
                 src/mailbox.c src/message.c src/log.c
 SERVICE_DEFS := -D_POSIX_C_SOURCE=200809L -DLUV_LOADER_TESTING
 
 LUA_SPECS := serializer_spec serializer_shared_ref_spec lifecycle_spec \
              mailbox_spec rpc_spec rpc_cross_service_spec dispatch_batch_spec \
-             table_source_spec bootstrap_spec root_spec idle_hook_spec scheduler_spec \
-             scheduler_daily_spec
+             table_source_spec bootstrap_spec root_spec idle_hook_spec log_spec \
+             scheduler_spec scheduler_daily_spec
 
-.PHONY: all test test-contract test-mailbox test-service test-lua \
+.PHONY: all test test-contract test-mailbox test-log test-service test-lua \
         test-scheduler test-examples test-regression test-tsan install clean
 
 all: $(MODULE)
@@ -55,16 +56,22 @@ $(BUILD)/message_abi_test: tests/contract/message_abi_test.c src/message.h | $(B
 $(BUILD)/mailbox_test: $(MAILBOX_SRCS) $(HDRS) | $(BUILD)
 	$(CC) $(TEST_CFLAGS) -Isrc -o $@ $(MAILBOX_SRCS) -lpthread
 
+$(BUILD)/log_test: $(LOG_SRCS) $(HDRS) | $(BUILD)
+	$(CC) $(TEST_CFLAGS) -Isrc -o $@ $(LOG_SRCS) -lpthread
+
 $(BUILD)/service_lifecycle_test: $(SERVICE_SRCS) $(HDRS) | $(BUILD)
 	$(CC) $(TEST_CFLAGS) $(SERVICE_DEFS) $(LUAINC) -Isrc -o $@ $(SERVICE_SRCS) $(LIBS)
 
 $(BUILD)/mailbox_test_tsan: $(MAILBOX_SRCS) $(HDRS) | $(BUILD)
 	$(CC) $(TSAN_CFLAGS) -Isrc -o $@ $(MAILBOX_SRCS) -lpthread
 
+$(BUILD)/log_test_tsan: $(LOG_SRCS) $(HDRS) | $(BUILD)
+	$(CC) $(TSAN_CFLAGS) -Isrc -o $@ $(LOG_SRCS) -lpthread
+
 $(BUILD)/service_lifecycle_test_tsan: $(SERVICE_SRCS) $(HDRS) | $(BUILD)
 	$(CC) $(TSAN_CFLAGS) $(SERVICE_DEFS) $(LUAINC) -Isrc -o $@ $(SERVICE_SRCS) $(LIBS)
 
-test: test-contract test-mailbox test-service test-lua test-examples
+test: test-contract test-mailbox test-log test-service test-lua test-examples
 
 test-contract: $(MODULE) $(BUILD)/seri.so $(BUILD)/message_abi_test
 	$(LUA_ENV) luajit tests/contract/api_surface_spec.lua
@@ -73,6 +80,12 @@ test-contract: $(MODULE) $(BUILD)/seri.so $(BUILD)/message_abi_test
 
 test-mailbox: $(BUILD)/mailbox_test
 	$<
+
+# The logger reads its defaults from the environment.
+LOG_TEST_ENV := env -u SERVICE_LOG_LEVEL -u SERVICE_LOG_FORMAT -u JOURNAL_STREAM
+
+test-log: $(BUILD)/log_test
+	$(LOG_TEST_ENV) $<
 
 test-service: $(MODULE) $(BUILD)/service_lifecycle_test
 	$(LUA_ENV) $(BUILD)/service_lifecycle_test
@@ -102,8 +115,10 @@ test-regression: $(MODULE)
 # false races between concurrent uv_loop_init calls, so disable it here.
 TSAN_ENV := env TSAN_OPTIONS=halt_on_error=1 UV_USE_IO_URING=0
 
-test-tsan: $(MODULE) $(BUILD)/mailbox_test_tsan $(BUILD)/service_lifecycle_test_tsan
+test-tsan: $(MODULE) $(BUILD)/mailbox_test_tsan $(BUILD)/log_test_tsan \
+           $(BUILD)/service_lifecycle_test_tsan
 	setarch $$(uname -m) -R $(TSAN_ENV) $(BUILD)/mailbox_test_tsan
+	$(LOG_TEST_ENV) setarch $$(uname -m) -R $(TSAN_ENV) $(BUILD)/log_test_tsan
 	$(LUA_ENV) setarch $$(uname -m) -R $(TSAN_ENV) $(BUILD)/service_lifecycle_test_tsan
 
 install: $(MODULE)

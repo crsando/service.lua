@@ -305,6 +305,25 @@ idle hook 在每轮消息分发结束时调用一次（service 启动后会先�
 - `service.on_idle` 只有一个槽位，仅为兼容旧代码保留。多个模块请各自用 `add_idle_hook` 注册。
 - C 层只能对 service 处于运行状态时取得的 async 指针调用 `uv_async_send`，并且必须在 service 停止前停止回调。
 
+### 日志
+
+```lua
+service.log.info("order accepted", order_id)
+service.log.warn("retrying", attempt)
+```
+
+运维时不需要改代码：
+
+```sh
+SERVICE_LOG_LEVEL=off luajit main.lua          # 关闭所有日志
+SERVICE_LOG_LEVEL=debug luajit main.lua        # 打开 debug
+luajit main.lua 2>>app.log                     # 重定向到文件
+```
+
+在 systemd 下运行时，stderr 默认进入 journal，运行时会自动切换为 journal 格式，之后可以用 `journalctl -u <unit> -p warning` 按级别查看。级别可以写在 unit 的 `Environment=SERVICE_LOG_LEVEL=warn` 中。
+
+如果配置来自应用自己的配置文件，在启动时调用一次 `service.log_config { level = cfg.log_level }`，它的优先级高于环境变量。
+
 ## 9. 常见陷阱
 
 | 现象 | 原因 | 处理 |

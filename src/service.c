@@ -31,7 +31,7 @@ service_async_cb(uv_async_t *handle) {
     if (lua_pcall(service->L, 1, 1, 0) != LUA_OK) {
         const char *message = lua_tostring(service->L, -1);
 
-        log_error("service %u handler: %s", service->id, message);
+        log_error("[svc %u] dispatch: %s", service->id, message);
         service_set_exit_error(service,
             message != NULL ? message : "dispatcher error");
         handler_failed = true;
@@ -46,7 +46,7 @@ service_async_cb(uv_async_t *handle) {
     }
     if (batch_full && mailbox_finish_batch(service->inbox) &&
         uv_async_send(&service->inbox_async) != 0) {
-        log_error("could not continue dispatch for service %u", service->id);
+        log_error("[svc %u] could not continue dispatch", service->id);
         service_stop(service);
     }
 }
@@ -394,7 +394,7 @@ service_init_lua(service_t *service) {
     if ((service->source[0] == '@' ?
             lua_loadfile_as_buffer(L, service->source) :
             luaL_loadstring(L, service->source)) != LUA_OK) {
-        log_error("service %u load: %s", service->id,
+        log_error("[svc %u] load: %s", service->id,
             lua_tostring(L, -1));
         return EINVAL;
     }
@@ -403,7 +403,7 @@ service_init_lua(service_t *service) {
     if (service_bind_lservice(service, L) != 0) {
         free(service->config);
         service->config = NULL;
-        log_error("service %u bind: %s", service->id,
+        log_error("[svc %u] bind: %s", service->id,
             lua_tostring(L, -1));
         return EINVAL;
     }
@@ -416,21 +416,21 @@ service_init_lua(service_t *service) {
     if (lua_pcall(L, argument_count, 1, 0) != LUA_OK) {
         free(service->config);
         service->config = NULL;
-        log_error("service %u init: %s", service->id,
+        log_error("[svc %u] init: %s", service->id,
             lua_tostring(L, -1));
         return EINVAL;
     }
     if (lua_istable(L, -1) && service_normalize_handler(L) != 0) {
         free(service->config);
         service->config = NULL;
-        log_error("service %u handler: %s", service->id,
+        log_error("[svc %u] handler: %s", service->id,
             lua_tostring(L, -1));
         return EINVAL;
     }
     free(service->config);
     service->config = NULL;
     if (!lua_isfunction(L, -1)) {
-        log_error("service %u source did not return a handler", service->id);
+        log_error("[svc %u] source did not return a handler", service->id);
         return EINVAL;
     }
     service->func_ref = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -459,7 +459,7 @@ close_luv_handle(lua_State *L) {
     lua_pushvalue(L, lua_upvalueindex(1));
     lua_pushvalue(L, 1);
     if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
-        log_error("service %u inspect luv handle: %s", context->service->id,
+        log_error("[svc %u] inspect luv handle: %s", context->service->id,
             lua_tostring(L, -1));
         context->error = EINVAL;
         lua_pop(L, 1);
@@ -473,7 +473,7 @@ close_luv_handle(lua_State *L) {
     lua_pushvalue(L, lua_upvalueindex(2));
     lua_pushvalue(L, 1);
     if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-        log_error("service %u close luv handle: %s", context->service->id,
+        log_error("[svc %u] close luv handle: %s", context->service->id,
             lua_tostring(L, -1));
         context->error = EINVAL;
         lua_pop(L, 1);
@@ -514,7 +514,7 @@ service_close_luv_handles(service_t *service) {
     lua_pushlightuserdata(L, &context);
     lua_pushcclosure(L, close_luv_handle, 3);
     if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-        log_error("service %u walk luv handles: %s", service->id,
+        log_error("[svc %u] walk luv handles: %s", service->id,
             lua_tostring(L, -1));
         context.error = EINVAL;
     }
@@ -615,7 +615,7 @@ service_finish_thread(service_t *service) {
             if (error == 0)
                 break;
             if (error != UV_EBUSY)
-                log_error("service %u could not close loop: %s", service->id,
+                log_error("[svc %u] could not close loop: %s", service->id,
                     uv_strerror(error));
         }
     }
@@ -808,7 +808,7 @@ service_stop(service_t *service) {
     if (inbox != NULL)
         mailbox_close(inbox);
     if (control != NULL && uv_async_send(control) != 0)
-        log_error("could not request stop for service %u", service->id);
+        log_error("[svc %u] could not request stop", service->id);
     return 0;
 }
 
@@ -843,7 +843,7 @@ service_send(service_pool_t *pool, const message_t *message) {
     service_unpin(service);
 
     if (notify_error != 0) {
-        log_error("could not notify service %u", service->id);
+        log_error("[svc %u] could not notify", service->id);
         service_stop(service);
     }
     return result;
@@ -947,7 +947,7 @@ service_pool_delete(service_pool_t *pool) {
     for (service_id_t id = 0; id < pool->next_id; id++) {
         int error = service_join(pool->services[id]);
         if (error != 0) {
-            log_error("could not join service %u during pool delete: %d",
+            log_error("[svc %u] could not join during pool delete: %d",
                 id, error);
             return;
         }

@@ -53,6 +53,6 @@ end
 
 local ok, err = service.bootstrap { source = caller.source, args = args }
 if not ok then
-    io.stderr:write("service.root: ", tostring(err), "\n")
+    service._log(nil, "error", "service.root: " .. tostring(err))
 end
 os.exit(ok and 0 or 1)

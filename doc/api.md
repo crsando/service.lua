@@ -25,6 +25,7 @@ local service = require "service"
 | `service.pool` | 当前 pool。standalone 中首次 `new` 时创建 |
 | `service.config` | 当前 service 的配置 table，没有配置时为 `{}`。standalone 中为 nil |
 | `service.uv` | 本 VM 的 luv 模块。service 中已绑定到本 service 的 loop |
+| `service.log` | 日志函数表：`debug/info/warn/error`，见 [§11](#11-日志) |
 | `service.on_idle` | 可选。每轮消息分发结束时调用的同步钩子，见 [§7](#7-分发) |
 | `service.scheduler` | 约定的挂载点，需要手动赋值：`service.scheduler = require "service.scheduler"` |
 | `service.yield_session` | `coroutine.yield` 的别名 |
@@ -75,7 +76,7 @@ service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 和�
 - **宿主线程中**：
   1. 沿调用栈找到 require 它的 Lua 栈帧。它必须是文件的顶层（`what == "main"`），source 以 `@` 开头；存在全局 `arg` 时，还必须等于 `"@" .. arg[0]`。不满足时报错 `service.root: must be required ...`；
   2. 调用 `bootstrap { source = <该文件>, args = arg[1..n] }`；
-  3. 失败时向 stderr 写 `service.root: <err>`；
+  3. 失败时以 ERROR 级别记录 `service.root: <err>`；
   4. 执行 `os.exit(ok and 0 or 1)`，不会返回。
 
 入口命令固定为 `boot`。
@@ -185,7 +186,7 @@ service 启动后，运行时会立即触发一轮分发，因此 `on_idle` 和�
 5. 如果 service 尚未 quit：先调用 `service.on_idle`（若已设置），再按注册顺序调用 `add_idle_hook` 注册的 hook；
 6. 如果本轮处理满了 256 条，再唤醒自己一次，以便 timer 和 socket 有机会执行。
 
-handler 中的错误只影响当前请求。`on_idle` 或 idle hook 中的错误，或者分发循环本身的错误，会停止整个 service。
+handler 中的错误只影响当前请求，并带 traceback 记录日志：session > 0 时调用方会收到这个错误，记为 WARN；否则（`send` 的请求）没有人会看到它，记为 ERROR。`on_idle` 或 idle hook 中的错误，或者分发循环本身的错误，会停止整个 service，记为 ERROR。
 
 ### `service.add_idle_hook(fn) -> remove`
 
@@ -226,7 +227,10 @@ hook 是同步回调，约束与 `on_idle` 相同。hook 运行期间（包括 `
 | `_lookup` | `(pool, name)` | id 或 nil |
 | `_send_message` | `(pool, from, to, session, type, ptr?, size?)` | `true` 或 `nil, code` |
 | `_recv_message` | `(addr, blocking)` | 6 个字段或无返回值 |
-| `_log_error` | `(addr, message)` | 无返回值 |
+| `_log` | `(addr?, level, message, file?, line?)` | 无返回值。`addr` 为 nil 时标记为 `[host]`；`level` 为 `debug/info/warn/error` |
+| `_log_error` | `(addr, message)` | 无返回值。兼容保留，等同于 `_log(addr, "error", message)` |
+| `_log_enabled` | `(level)` | 该级别当前是否会输出 |
+| `_log_config` | `(level?, format?)` | 当前生效的 `level, format`。参数非法时抛错，且两者都不生效 |
 | `pack` / `unpack` / `unpack_remove` / `remove` | 见 §8 | |
 
 ## 10. 消息类型
@@ -242,3 +246,36 @@ hook 是同步回调，约束与 `on_idle` 相同。hook 运行期间（包括 `
 | 4 | `MESSAGE_SIGNAL` | 保留，目前直接丢弃 |
 
 session 由调用方按 service 独立分配，在 uint32 范围内回绕时会跳过 0 和仍在等待中的 session。
+
+## 11. 日志
+
+运行时和业务代码共用一个进程级的 logger。每条记录格式化成一行（多行消息如 traceback 也作为一条记录），用一次 `write(2)` 写到 stderr，不同线程的记录不会交错。单条记录最长 4096 字节，超出部分截断并以 `...` 结尾。日志写到哪里由启动进程的一方决定（shell 重定向、systemd 等），运行时不负责打开或轮转文件。
+
+### `service.log.debug/info/warn/error(...)`
+
+参数逐个 `tostring` 后用 `\t` 连接。记录中带上调用处的 Lua 文件和行号，以及来源标记：service 中为 `[svc <id>]`，宿主线程中为 `[host]`。级别未启用时直接返回，不做格式化。
+
+### `service.log_config { level?, format? } -> level, format`
+
+修改进程级配置，作用于所有 service，优先于环境变量。返回当前生效的级别和格式。值非法时抛错，且不做任何修改。可以在任何线程调用，建议在启动时设置一次。
+
+### 配置
+
+| 来源 | 说明 |
+| --- | --- |
+| 默认值 | level 为 `info`；format 自动判断 |
+| `SERVICE_LOG_LEVEL` | `debug` / `info` / `warn` / `error` / `off`。非法值会被忽略，并输出一条 WARN |
+| `SERVICE_LOG_FORMAT` | `text` / `journal`。未设置时，如果 stderr 正是 `JOURNAL_STREAM` 指向的流（即由 systemd 接入 journal），使用 `journal`，否则使用 `text` |
+| `service.log_config` | 优先级最高 |
+
+环境变量只在第一次写日志或修改配置时读取一次。每个进程有自己的环境变量副本，不同进程互不影响；子进程会继承父进程的环境变量。
+
+### 格式
+
+```text
+text:    2026-10-26 09:39:15.123 INFO  service/order.lua:42: [svc 1] order accepted	1001
+journal: <6>service/order.lua:42: [svc 1] order accepted	1001
+```
+
+- 位置部分（`file:line: `）可能缺省，例如运行时记录的请求错误，它的位置在 traceback 中。
+- journal 格式不带时间戳（由 journald 记录），每一行都以 syslog 优先级开头：`<7>` debug、`<6>` info、`<4>` warn、`<3>` error。可以用 `journalctl -p err` 按级别过滤。

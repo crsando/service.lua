@@ -255,13 +255,65 @@ static int lservice_recv_message(lua_State *L) {
     }
 }
 
-static int lservice_log_error(lua_State *L) {
-    luaL_checktype(L, 1, LUA_TLIGHTUSERDATA);
-    service_t *s = lua_touserdata(L, 1);
-    const char *message = luaL_checkstring(L, 2);
+static int check_log_level(lua_State *L, int arg) {
+    int level = log_parse_level(luaL_checkstring(L, arg));
+    if (level < 0 || level == LOG_OFF)
+        return luaL_argerror(L, arg, "invalid log level");
+    return level;
+}
 
-    log_error("service %u handler: %s", s->id, message);
+// addr is nil on the host thread. file and line are optional.
+static int write_log(lua_State *L, int level, int message_arg) {
+    const char *message = luaL_checkstring(L, message_arg);
+    const char *file = luaL_optstring(L, message_arg + 1, NULL);
+    int line = (int)luaL_optinteger(L, message_arg + 2, 0);
+
+    if (!log_enabled(level))
+        return 0;
+    if (lua_isnoneornil(L, 1)) {
+        log_write(level, file, line, "[host] %s", message);
+    } else {
+        luaL_checktype(L, 1, LUA_TLIGHTUSERDATA);
+        service_t *s = lua_touserdata(L, 1);
+        log_write(level, file, line, "[svc %u] %s", s->id, message);
+    }
     return 0;
+}
+
+static int lservice_log(lua_State *L) {
+    return write_log(L, check_log_level(L, 2), 3);
+}
+
+static int lservice_log_error(lua_State *L) {
+    return write_log(L, LOG_ERROR, 2);
+}
+
+static int lservice_log_enabled(lua_State *L) {
+    lua_pushboolean(L, log_enabled(check_log_level(L, 1)));
+    return 1;
+}
+
+// Validates both arguments before applying either; returns the settings
+// now in effect.
+static int lservice_log_config(lua_State *L) {
+    int level = -1, format = -1;
+    if (!lua_isnoneornil(L, 1)) {
+        level = log_parse_level(luaL_checkstring(L, 1));
+        if (level < 0)
+            return luaL_argerror(L, 1, "invalid log level");
+    }
+    if (!lua_isnoneornil(L, 2)) {
+        format = log_parse_format(luaL_checkstring(L, 2));
+        if (format < 0)
+            return luaL_argerror(L, 2, "invalid log format");
+    }
+    if (level >= 0)
+        log_set_level(level);
+    if (format >= 0)
+        log_set_format(format);
+    lua_pushstring(L, log_level_name(log_get_level()));
+    lua_pushstring(L, log_format_name(log_get_format()));
+    return 2;
 }
 
 static int
@@ -301,7 +353,10 @@ LUAMOD_API int luaopen_service_c(lua_State *L) {
 		{ "_get_id", lservice_get_id },
 		{ "_send_message", lservice_send_message },
 		{ "_recv_message", lservice_recv_message },
+		{ "_log", lservice_log },
 		{ "_log_error", lservice_log_error },
+		{ "_log_enabled", lservice_log_enabled },
+		{ "_log_config", lservice_log_config },
 
         // serialization components
 		{ "remove", luaseri_remove },

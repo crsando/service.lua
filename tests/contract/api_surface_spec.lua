@@ -31,6 +31,7 @@ assert_functions(service, {
     "get_session",
     "quit",
     "add_idle_hook",
+    "log_config",
     "dispatch",
     "bootstrap",
     "sleep",
@@ -57,12 +58,18 @@ assert_functions(native, {
     "_get_id",
     "_send_message",
     "_recv_message",
+    "_log",
     "_log_error",
+    "_log_enabled",
+    "_log_config",
     "pack",
     "unpack",
     "unpack_remove",
     "remove",
 }, "service_c")
+
+assert(type(service.log) == "table", "service.log must be a table")
+assert_functions(service.log, { "debug", "info", "warn", "error" }, "service.log")
 
 assert(type(service.uv) == "table", "service.uv must be the luv module")
 assert(service.yield_session == coroutine.yield, "yield_session compatibility alias changed")

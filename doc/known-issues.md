@@ -52,9 +52,11 @@ quit 之后，等待中的 `call` 和 `sleep` 永远不会被恢复。其他 ser
 
 ### RT-9（P3）错误信息只写在日志里
 
-`SERVICE_START_FAILED` 只带一个 errno，source 语法错误等真正的原因只写到 stderr。预期中的 handler 错误（例如被调用方处理的业务错误）也一律以 ERROR 级别输出，并且无法在 Lua 侧调整日志级别。
+`SERVICE_START_FAILED` 只带一个 errno，source 语法错误等真正的原因只写到日志。
 
-**方向**：在 start 的错误中带上 Lua 错误信息，并在 Lua 侧暴露日志级别控制。
+**方向**：在 start 的错误中带上 Lua 错误信息。
+
+日志级别控制已完成：见 [API §11](api.md#11-日志)，调研与取舍见 [logging-research.md](logging-research.md)。
 
 ### RT-10（P3）宿主线程发送的消息 `from` 为 0
 
@@ -74,7 +76,7 @@ standalone 中 `get_id()` 返回 0，与 root 的 ID 相同。由于宿主线程
 
 | ID | 级别 | 问题 | 方向 |
 | --- | --- | --- | --- |
-| ENG-1 | P3 | 缺少顶层 LICENSE/NOTICE。`src/log.c`（rxi，MIT）和 `src/lua-seri.c`（cloudwu，MIT）需要保留署名 | 补充 LICENSE 和 NOTICE |
+| ENG-1 | P3 | 缺少顶层 LICENSE/NOTICE。`src/lua-seri.c`（cloudwu，MIT）需要保留署名 | 补充 LICENSE 和 NOTICE |
 | ENG-2 | P3 | 没有 `test-asan`、`lint` 和 CI | 补充这些 target，并把 `make test`、`make test-tsan` 纳入 CI |
 | ENG-3 | P3 | 缺少长时间运行的压力测试（例如百万条消息下内存和 Lua 栈不增长），也缺少 bootstrap 结束后的资源计数校验 | 增加 stress 测试和资源计数 |
 | ENG-4 | P3 | `message.h` 中有未使用的 receipt、schedule 常量和兼容 typedef；`tests/legacy/test.lua` 引用了已不存在的模块 | 清理，或者明确标注为保留 |

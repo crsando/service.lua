@@ -25,6 +25,7 @@ return root
 - **显式失败**：目标不存在、正在停止或邮箱已满时，`send` 和 `call` 返回 `nil, err`，不会静默丢消息。handler 抛出的错误会作为 `nil, err` 回到调用方。
 - **内置 libuv**：每个 service 里的 `require "luv"` 已绑定到该 service 自己的 loop，timer、socket、子进程等可以直接使用。
 - **可接入外部线程**：C/C++ 回调线程可以通过 `service.get_async()` 唤醒 service，再由 `service.add_idle_hook` 注册的 hook 在 service 线程内取走数据（见[使用指南](doc/guide.md#外部线程接入)）。
+- **日志**：`service.log.*` 输出到 stderr，可通过 `SERVICE_LOG_LEVEL` 关闭或调整级别，在 systemd 下自动使用 journal 格式。
 - **可选调度器**：`service.scheduler` 提供绝对时间和每日定时任务。
 
 ## 依赖
@@ -52,7 +53,7 @@ LUA_PATH='./lua/?.lua;;' LUA_CPATH='./build/?.so;;' luajit service/root.lua [gre
 LUA_PATH='./lua/?.lua;;' LUA_CPATH='./build/?.so;;' luajit examples/scheduler.lua
 ```
 
-`service/root.lua` 是 demo 的 root，可以直接运行。它依次演示 spawn、多返回值 call、错误返回、send、sleep、可重入回调和有序关闭。运行时 stderr 会出现一条 `unknown command: nope` 的 ERROR 日志，这是示例有意触发的错误。
+`service/root.lua` 是 demo 的 root，可以直接运行。它依次演示 spawn、多返回值 call、错误返回、send、sleep、可重入回调和有序关闭。运行时 stderr 会出现一条 `unknown command: nope` 的 WARN 日志，这是示例有意触发的错误。
 
 ## 目录
 

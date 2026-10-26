@@ -228,12 +228,15 @@ local function resume_session(co, ...)
 
     session_coroutine_address[co] = nil
     session_coroutine_response[co] = nil
-    if from ~= nil and type(session) == "number" then
-        local message = error_message(errobj)
-        service._log_error(service.self, message)
-        if session > 0 then
-            send_error_response(from, session, message)
-        end
+    local message = error_message(errobj)
+    local trace = debug.traceback(co, message)
+    if from ~= nil and type(session) == "number" and session > 0 then
+        -- The caller receives the error, so it is only a warning here.
+        service._log(service.self, "warn", trace)
+        send_error_response(from, session, message)
+    else
+        -- Nobody else will see this error.
+        service._log(service.self, "error", trace)
     end
 end
 
@@ -405,13 +408,18 @@ function service.dispatch(request_handler)
             return
         end
         local co = new_session(function ()
-            local ok, errobj = pcall(request, unpack(args, 2, args.n))
+            local message
+            local ok, trace = xpcall(function ()
+                request(unpack(args, 2, args.n))
+            end, function (errobj)
+                message = error_message(errobj)
+                return debug.traceback(message, 2)
+            end)
             if not ok then
                 local co = running_thread
                 session_coroutine_address[co] = nil
                 session_coroutine_response[co] = nil
-                local message = error_message(errobj)
-                service._log_error(service.self, message)
+                service._log(service.self, "error", trace)
                 service.quit(message)
             end
         end, from, 0)
@@ -507,6 +515,36 @@ function service.bootstrap(entry)
         return nil, err
     end
     return true
+end
+
+--
+-- logging
+--
+
+-- Records go to stderr as single lines; see doc/api.md for the format.
+service.log = {}
+for _, level in ipairs { "debug", "info", "warn", "error" } do
+    service.log[level] = function (...)
+        if not service._log_enabled(level) then
+            return
+        end
+        local n = select("#", ...)
+        local parts = { ... }
+        for i = 1, n do
+            parts[i] = tostring(parts[i])
+        end
+        local info = debug.getinfo(2, "Sl")
+        service._log(service.self, level, table.concat(parts, "\t", 1, n),
+            info and info.short_src, info and info.currentline)
+    end
+end
+
+-- Process-wide: applies to every service and overrides SERVICE_LOG_LEVEL
+-- and SERVICE_LOG_FORMAT. Returns the level and format now in effect.
+function service.log_config(options)
+    options = options or {}
+    assert(type(options) == "table", "log options must be a table")
+    return service._log_config(options.level, options.format)
 end
 
 --

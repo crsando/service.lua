@@ -25,7 +25,7 @@
 | `src/lservice.c` | `luaopen_service_c` 及其导出函数 |
 | `src/loadluv.c/.h` | 进程内只 `dlopen` 一次 luv，并为每个 VM 绑定各自的 loop |
 | `src/lua-seri.c/.h` | 序列化（源自 ltask 和 skynet 的 lua-seri） |
-| `src/log.c/.h` | 线程安全的 stderr 日志 |
+| `src/log.c/.h` | 进程级 logger：按级别过滤，每条记录一次 `write(2)` 写到 stderr，支持 text 和 journal 格式 |
 | `lua/service.lua` | 公共 API、session 与 coroutine 管理、分发循环 |
 
 ## 2. Pool 与句柄
@@ -66,7 +66,7 @@
 
 - 每个 service 维护一个 `next_session`，在 1..UINT32_MAX 范围内回绕，并跳过仍在等待中的 session。
 - `call` 在发送前先检查当前 coroutine 是否由运行时管理，然后分配 session 并发送 REQUEST。发送失败时直接返回 `nil, err`，不挂起。发送成功后，把 `session → coroutine` 记入等待表，然后 yield。
-- 接收方为每个 REQUEST 创建一个 coroutine，并记下 `from` 和 `session`。handler 正常返回后发送 RESPONSE。handler 抛错时（由 `resume_session` 捕获）记录日志，并在 session > 0 时发送 ERROR。
+- 接收方为每个 REQUEST 创建一个 coroutine，并记下 `from` 和 `session`。handler 正常返回后发送 RESPONSE。handler 抛错时（由 `resume_session` 捕获）用 `debug.traceback(co, msg)` 带上 traceback 记录日志：session > 0 时记为 WARN 并发送 ERROR，否则记为 ERROR。
 - 收到 RESPONSE 或 ERROR 时，按 session 找到等待中的 coroutine 并恢复它。找不到时直接释放 payload。运行时不校验响应的 `from`。
 - 信任模型：一旦请求被接收，就假定接收方一定会回复（completion 必达）。因此没有超时、取消、重试，也不处理迟到的响应。
 
@@ -107,7 +107,7 @@ NEW ─start─▶ STARTING ─init ok─▶ RUNNING ─stop─▶ STOPPING ─t
 
 **退出原因**：`service_t.exit_error` 记录 service 为什么停止，只保留第一次写入的值。写入来源有两个：`service.quit(err)`（通过 `_stop` 的第二个参数），以及 `service_async_cb` 中 dispatcher 的 `lua_pcall` 失败。这个字段在 join 之后仍保留在墓碑中，pool 删除时才释放。
 
-**bootstrap 入口**：入口命令以 `MESSAGE_SYSTEM` 发送，payload 为 `("bootstrap", entry, ...)`。dispatcher 为它创建一个由运行时管理的 coroutine（session 为 0），用 `pcall` 执行 `request(entry, ...)`。LuaJIT 允许在 `pcall` 内部 yield，所以入口中可以正常 `call` 和 `sleep`。如果出错，就记录日志并执行 `service.quit(message)`。
+**bootstrap 入口**：入口命令以 `MESSAGE_SYSTEM` 发送，payload 为 `("bootstrap", entry, ...)`。dispatcher 为它创建一个由运行时管理的 coroutine（session 为 0），用 `xpcall` 执行 `request(entry, ...)`，出错时在栈展开前取得 traceback。LuaJIT 允许在 `xpcall` 内部 yield，所以入口中可以正常 `call` 和 `sleep`。如果出错，就以 ERROR 级别记录 traceback 并执行 `service.quit(message)`。
 
 **`service.root` 的环境判断**：`lua/service/root.lua` 用 `service.self` 区分宿主和 service。这依赖 native 的启动顺序：执行 source 之前，已经调用过 `service.input(addr, config)`。调用者通过 `debug.getinfo` 查找：第 1 层是查找函数本身，第 2 层是模块主体，从第 3 层往上跳过 C 栈帧（即 `require`），第一个 Lua 栈帧就是调用者。LuaJIT 的尾调用不会保留栈帧，所以模块里写 `return require "service.root"` 时，调用者看起来是主脚本。这种情况最终会因为主脚本没有返回 handler 而启动失败。
 

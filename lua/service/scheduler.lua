@@ -329,8 +329,8 @@ local function report_error(message)
     if not ok or type(text) ~= "string" then
         text = "unknown scheduler error"
     end
-    if service.self ~= nil and type(service._log_error) == "function" then
-        local ok = pcall(service._log_error, service.self, "scheduler: " .. text)
+    if type(service._log) == "function" then
+        local ok = pcall(service._log, service.self, "error", "scheduler: " .. text)
         if ok then
             return
         end
